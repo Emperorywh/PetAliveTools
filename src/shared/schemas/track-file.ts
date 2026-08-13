@@ -14,6 +14,7 @@ import { check, isFiniteNumber, type ValidationErrors } from './validate'
  * 检查范围：
  * - version === 1
  * - fps 为正有限数；frameCount 为 ≥ 1 的整数
+ * - sourceWidth 为 ≥ 1 的整数（位移曲线像素空间，§7.2）
  * - offsets 为有限数字数组且长度 === frameCount
  * - keypoints 按 frame 升序、帧唯一、帧在 [0, frameCount) 内、offset 有限
  */
@@ -36,6 +37,12 @@ export function validateTrackFile(data: unknown): ValidationErrors {
     Number.isInteger(t['frameCount']) && (t['frameCount'] as number) >= 1,
     errors,
     'track.frameCount: expected an integer ≥ 1'
+  )
+
+  check(
+    Number.isInteger(t['sourceWidth']) && (t['sourceWidth'] as number) >= 1,
+    errors,
+    'track.sourceWidth: expected an integer ≥ 1 (§7.2)'
   )
 
   const offsets = t['offsets']

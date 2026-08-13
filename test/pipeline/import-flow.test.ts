@@ -472,6 +472,7 @@ describe('buildClipMeta', () => {
       version: 1,
       fps: 30,
       frameCount: 3,
+      sourceWidth: 240,
       offsets: [0, 1.5, 3.0],
       keypoints: [],
     }
@@ -612,6 +613,7 @@ describe('End-to-end: project I/O + clip save', () => {
       version: 1,
       fps: 30,
       frameCount: 3,
+      sourceWidth: 240,
       offsets: [0, 1.5, 3.0],
       keypoints: [],
     }

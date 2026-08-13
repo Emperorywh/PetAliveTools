@@ -42,7 +42,8 @@ export function buildWalkTrack(
     throw new Error('cannot build walk track from empty frames')
   }
   const track = trackWalkFrames(keyedFrames)
-  const trackFile = generateDisplacementCurve(track, fps)
+  // 位移曲线的像素空间 = 跟踪帧宽度（运行时换算屏幕位移用，§7.2）
+  const trackFile = generateDisplacementCurve(track, fps, keyedFrames[0].frame.width)
   const moveSegment = detectMoveSegment(trackFile.offsets, fps)
   return { trackFile, moveSegment }
 }

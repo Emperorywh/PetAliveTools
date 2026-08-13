@@ -15,11 +15,12 @@ function trackXs(xs: number[], feetY = 110): WalkFrameTrack[] {
 
 describe('generateDisplacementCurve（位移曲线 track.json, §5.3）', () => {
   it('emits per-frame x offsets normalized to zero at the first frame', () => {
-    const curve = generateDisplacementCurve(trackXs([60, 63, 66, 70]), 30)
+    const curve = generateDisplacementCurve(trackXs([60, 63, 66, 70]), 30, 240)
 
     expect(curve.version).toBe(1)
     expect(curve.fps).toBe(30)
     expect(curve.frameCount).toBe(4)
+    expect(curve.sourceWidth).toBe(240)
     expect(curve.offsets).toHaveLength(4)
     expect(curve.offsets[0]).toBe(0)
     expect(curve.offsets[1]).toBeCloseTo(3, 6)
@@ -28,14 +29,16 @@ describe('generateDisplacementCurve（位移曲线 track.json, §5.3）', () => 
   })
 
   it('keeps negative offsets for leftward walks (方向由镜像处理，不取绝对值)', () => {
-    const curve = generateDisplacementCurve(trackXs([100, 95, 90]), 30)
+    const curve = generateDisplacementCurve(trackXs([100, 95, 90]), 30, 240)
     expect(curve.offsets[1]).toBeCloseTo(-5, 6)
     expect(curve.offsets[2]).toBeCloseTo(-10, 6)
   })
 
   it('throws on invalid input', () => {
-    expect(() => generateDisplacementCurve([], 30)).toThrow(/empty track/)
-    expect(() => generateDisplacementCurve(trackXs([1]), 0)).toThrow(/invalid fps/)
+    expect(() => generateDisplacementCurve([], 30, 240)).toThrow(/empty track/)
+    expect(() => generateDisplacementCurve(trackXs([1]), 0, 240)).toThrow(/invalid fps/)
+    expect(() => generateDisplacementCurve(trackXs([1]), 30, 0)).toThrow(/invalid sourceWidth/)
+    expect(() => generateDisplacementCurve(trackXs([1]), 30, 1.5)).toThrow(/invalid sourceWidth/)
   })
 })
 

@@ -989,6 +989,7 @@ export class ImportWizard {
     const initialState: WalkCorrectionState = {
       fps: trackFile.fps,
       frameCount: trackFile.frameCount,
+      sourceWidth: trackFile.sourceWidth,
       offsets: trackFile.offsets,
       keypoints: [],
       moveStartFrame: moveSegment?.moveStartFrame ?? 0,

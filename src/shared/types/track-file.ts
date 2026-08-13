@@ -27,7 +27,13 @@ export interface TrackFile {
   readonly fps: number
   /** 帧数（= offsets.length） */
   readonly frameCount: number
-  /** 逐帧 x 偏移序列（源像素；offsets[0] 归一为 0） */
+  /**
+   * 跟踪画面宽度（像素）：offsets 以此宽度的画面像素为单位。
+   * 跟踪在降采样帧上进行（§5.5 导入流程），与转码后片段分辨率不同；
+   * 运行时据此换算屏幕位移比例 scale = 显示宽度 / sourceWidth (§7.2)。
+   */
+  readonly sourceWidth: number
+  /** 逐帧 x 偏移序列（跟踪画面像素；offsets[0] 归一为 0） */
   readonly offsets: readonly number[]
   /** 手动校正关键点（按帧升序，帧唯一） */
   readonly keypoints: readonly TrackKeypoint[]

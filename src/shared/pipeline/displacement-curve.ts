@@ -21,13 +21,20 @@ import type { WalkFrameTrack } from './walk-tracker'
  *
  * offsets[i] = 质心 x[i] − 质心 x[0]（起点归一为 0）。
  * 向左行走时为负值，运行时由方向/镜像处理，此处不取绝对值。
+ *
+ * sourceWidth 记录跟踪画面的像素宽度（跟踪通常在降采样帧上进行，
+ * §5.5），运行时空间层据此把曲线像素换算为屏幕像素 (§7.2)。
  */
 export function generateDisplacementCurve(
   track: readonly WalkFrameTrack[],
-  fps: number
+  fps: number,
+  sourceWidth: number
 ): TrackFile {
   if (!Number.isFinite(fps) || fps <= 0) {
     throw new Error(`invalid fps: ${fps}`)
+  }
+  if (!Number.isInteger(sourceWidth) || sourceWidth <= 0) {
+    throw new Error(`invalid sourceWidth: ${sourceWidth}`)
   }
   if (track.length === 0) {
     throw new Error('cannot generate displacement curve from empty track')
@@ -40,6 +47,7 @@ export function generateDisplacementCurve(
     version: 1,
     fps,
     frameCount: offsets.length,
+    sourceWidth,
     offsets,
     keypoints: []
   }

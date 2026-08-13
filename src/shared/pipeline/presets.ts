@@ -13,6 +13,8 @@
  * 纯配置数据，无平台依赖（主进程转码管线与渲染预览共用）。
  */
 
+import { SHOULDER_HEIGHT_FACTOR } from '../spatial/scale'
+
 /** 转码质量档位 */
 export type TranscodePresetName = 'standard' | 'high' | 'sleep'
 
@@ -148,9 +150,9 @@ export function computeTargetEdge(
   if (!Number.isFinite(scaleHint) || scaleHint <= 0) {
     throw new Error(`invalid scaleHint: ${scaleHint}`)
   }
-  // 宠物肩高占屏幕高度的 screenPercent，片段整体（含头身尾）约为
-  // 肩高的 ~1.5–2 倍高，取 1.6 作为片段整体高度估计系数
-  const rawEdge = screenHeightPx * screenPercent * 1.6 * scaleHint
+  // 宠物肩高占屏幕高度的 screenPercent，片段整体高度按肩高估算系数
+  // （与运行时尺度归一化共用同一模型，§7.4 / spatial/scale.ts）
+  const rawEdge = screenHeightPx * screenPercent * SHOULDER_HEIGHT_FACTOR * scaleHint
   // VP9 要求偶数尺寸
   return Math.max(2, Math.round(rawEdge / 2) * 2)
 }

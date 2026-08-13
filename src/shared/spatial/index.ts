@@ -8,35 +8,46 @@
  * 跨进程共享模块。
  */
 
-/** 矩形区域（与 Electron Rectangle 同构） */
-export interface Rect {
-  x: number
-  y: number
-  width: number
-  height: number
-}
+export type { Rect, WorkAreaBounds } from './ground-line'
+export { computeGroundLine, groundedWindowY, clampWindowX } from './ground-line'
 
-/**
- * 工作区边界 + 地面线。
- * groundLine = workArea 底边 (§7.1)，宠物足部始终贴合此线。
- */
-export interface WorkAreaBounds extends Rect {
-  /** 地面线 = workArea.y + workArea.height (§7.1) */
-  groundLine: number
-}
+export type {
+  WalkWindowMapping
+} from './walk-mapping'
+export {
+  sampleDisplacementAt,
+  computeWalkScale,
+  walkDisplacementPx,
+  walkDisplacementScreenPx,
+  walkWindowX,
+  walkScreenSpan
+} from './walk-mapping'
 
-/**
- * 从工作区矩形计算边界与地面线（纯函数，便于单元测试）。
- *
- * 地面线定义为工作区（workArea）的底边——自动兼容任务栏在任意边、
- * 任务栏自动隐藏、多显示器布局（Electron screen 模块直接提供，§7.1）。
- */
-export function computeGroundLine(workArea: Rect): WorkAreaBounds {
-  return {
-    x: workArea.x,
-    y: workArea.y,
-    width: workArea.width,
-    height: workArea.height,
-    groundLine: workArea.y + workArea.height
-  }
-}
+export type { WalkDirection, EdgeSide, DirectionResolution, EdgeTurnPlan } from './edge-turning'
+export {
+  DEFAULT_EDGE_MARGIN_PX,
+  oppositeDirection,
+  detectEdgeSide,
+  directionAfterEdge,
+  resolveDirectedClip,
+  planEdgeTurn
+} from './edge-turning'
+
+export type { ScaleNormalizationInput } from './scale'
+export {
+  SHOULDER_HEIGHT_FACTOR,
+  DEFAULT_SCREEN_PERCENT,
+  computeNormalizedScale,
+  displayedClipHeightPx
+} from './scale'
+
+export type { DragPhase, ScreenPoint, DragGeometry, DragState } from './drag'
+export {
+  DEFAULT_RETURN_SPEED_PX_PER_SEC,
+  createDragState,
+  pickupDrag,
+  dragFollow,
+  releaseDrag,
+  stepReturn,
+  isDragSettled
+} from './drag'

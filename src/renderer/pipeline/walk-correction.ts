@@ -22,6 +22,8 @@ export interface WalkCorrectionState {
   readonly fps: number
   /** 帧数（= offsets.length） */
   readonly frameCount: number
+  /** 跟踪画面宽度（像素，位移曲线像素空间，§7.2） */
+  readonly sourceWidth: number
   /** 跟踪生成的原始逐帧偏移 */
   readonly offsets: readonly number[]
   /** 手动校正关键点（按帧升序维护） */
@@ -169,6 +171,7 @@ export class WalkCorrectionView {
       version: 1,
       fps: this.state.fps,
       frameCount: this.state.frameCount,
+      sourceWidth: this.state.sourceWidth,
       offsets: this.getCorrectedOffsets(),
       keypoints: this.state.keypoints
     }

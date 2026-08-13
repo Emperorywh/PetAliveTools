@@ -122,12 +122,13 @@ function buildDemoData(): {
   const cropped = rects.map((rect, i) => cropFrame(keyed[i].frame, rect, CROP_W, CROP_H))
 
   // 4. 位移曲线 + 行走子段自动检测（§5.3、§7.2）
-  const curve = generateDisplacementCurve(track, FPS)
+  const curve = generateDisplacementCurve(track, FPS, SRC_W)
   const segment = detectMoveSegment(curve.offsets, FPS)
 
   const state: WalkCorrectionState = {
     fps: FPS,
     frameCount: curve.frameCount,
+    sourceWidth: curve.sourceWidth,
     offsets: curve.offsets,
     keypoints: [],
     moveStartFrame: segment?.moveStartFrame ?? 0,
