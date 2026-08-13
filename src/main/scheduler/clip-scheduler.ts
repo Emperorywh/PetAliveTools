@@ -455,7 +455,7 @@ export class ClipScheduler {
     const nextState = fsm.step()
 
     // 2. 选择目标片段（多变体随机抽取, §9.5）
-    const picker = this.createVariantPicker(nextState)
+    const picker = this.createVariantPicker()
     const targetClip = selectClipForState(nextState, clips, picker)
     const isPlaceholder = isPlaceholderClip(targetClip)
 
@@ -715,7 +715,7 @@ export class ClipScheduler {
   /**
    * 创建变体选择器 (§9.5 多变体随机抽取)。
    */
-  private createVariantPicker(_state: string): VariantPicker {
+  private createVariantPicker(): VariantPicker {
     return (variants: readonly ClipMeta[]): ClipMeta => {
       if (variants.length <= 1) return variants[0]
       const idx = Math.floor(this.config.rng() * variants.length)

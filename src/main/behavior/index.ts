@@ -64,3 +64,41 @@ export type {
   PlanContext,
   PlanOptions,
 } from './anchor-transition'
+
+// —— TASK-013: 需求模型 / 性格 / 节律 / 离线推进 —— //
+
+export {
+  NEED_KEYS,
+  DEFAULT_NEED_RATES,
+  clampNeed,
+  clampNeeds,
+  advanceNeeds,
+  applyNeedDelta,
+  getHighNeeds,
+  needWeightModifiers,
+} from './needs'
+export type { NeedKey, NeedRates } from './needs'
+
+export {
+  OFFLINE_BOUNDS,
+  applyOfflineBounds,
+  advanceOffline,
+  computeOfflineSec,
+} from './offline-progression'
+
+export {
+  personalityWeightModifiers,
+  personalityNeedRates,
+  personalityInteractionModifiers,
+  personalitySignatureProbability,
+} from './personality'
+export type { InteractionModifiers } from './personality'
+
+export {
+  isNightTime,
+  currentHour,
+  rhythmWeightModifiers,
+  rhythmNeedRates,
+  computeRhythmModulation,
+} from './rhythm'
+export type { RhythmModulation } from './rhythm'

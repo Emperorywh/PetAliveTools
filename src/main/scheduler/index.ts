@@ -55,3 +55,21 @@ export type {
   SchedulerPhase,
   TickResult,
 } from './clip-scheduler'
+
+// —— TASK-013: 调度微随机化 —— //
+
+export {
+  jitteredPlaybackRate,
+  syncedWalkDuration,
+  jitteredIdleDuration,
+  jitteredPositionX,
+  shuffleVariants,
+  shouldInsertRareAction,
+  effectiveRareActionProbability,
+  pickRareAction,
+  generateRandomizationParams,
+} from './randomization'
+export type {
+  RandomizationParams,
+  RandomizationOptions,
+} from './randomization'
