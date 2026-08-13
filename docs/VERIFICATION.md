@@ -100,6 +100,7 @@
 | GAP-003 | `scheduler:reset` 通知无发送方 | preload 提供 `scheduler:reset` 监听但主进程从未发送该事件；崩溃恢复实际通过重启式恢复实现（FSM 构造即回 idle_sit 主锚定 + needs-state 离线推进，§13），不依赖该通道 | 保留为死通道或移除；不影响 §13 行为 |
 | GAP-004 | 导入向导写入非活跃目录时不热加载 | `import:saveClip` 仅当目标为活跃 profile 目录时触发调度器重建；向其他目录导入仍需重启或切换 profile（预期行为：运行时只加载活跃 profile） | 无需修复（设计如此）；文档化即可 |
 | GAP-005 | 交互动作声未传递当前片段上下文 | mouse-handler 抢占路径调用 `onActionTriggered(interaction, null)` 传 null 片段，embeddedAudio 例外判定依赖 `clip.audio` 时会走兜底解析 | 后续版本在 preempt 前解析当前片段传入 |
+| GAP-006 | `profile:switched` 通知无接收方 | profile 切换后主进程发送 `profile:switched`（handleActiveProfileChanged），但 preload 未暴露对应监听、渲染进程也未处理；与 GAP-003 互为反向。新宠物片段经 `scheduler:play` 正常下发，行为无断裂，仅渲染层无 profile 切换的显式感知 | 补充 preload profile 桥（onProfileSwitched）供渲染层 UI 感知，或移除该发送 |
 
 ## 5. 本次集成修复记录
 
