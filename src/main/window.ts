@@ -74,3 +74,30 @@ export function setInteractive(win: BrowserWindow, interactive: boolean): void {
     win.setIgnoreMouseEvents(true, { forward: true })
   }
 }
+
+/**
+ * 创建色键抠像预览工具窗口（§5.5 手动验证入口）。
+ *
+ * 与宠物窗口不同：普通带边框窗口、不透明、可交互，承载
+ * #chroma-preview 渲染视图（控件面板 + 抠像预览 + 边缘放大）。
+ * 由主进程在 PETALIVE_VIEW=chroma-preview 时创建。
+ */
+export function createChromaPreviewWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    title: '色键抠像预览（PetAliveTools）',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true
+    }
+  })
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#chroma-preview`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'chroma-preview' })
+  }
+
+  return win
+}

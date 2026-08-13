@@ -4,12 +4,16 @@
 // （位置/尺度/方向）、启动全局呼吸缩放、渲染接触阴影。
 // 参见 SPEC §6 (渲染层)。
 //
+// #chroma-preview 视图：引导色键抠像预览（§5.5），由主进程在
+// PETALIVE_VIEW=chroma-preview 时加载，用于手动验证抠像质量。
+//
 // 验证说明：将测试 WebM-alpha 片段放置于 src/renderer/public/test-clip.webm，
 // 运行 npm run dev 即可在透明窗口中验证播放效果。
 
 import { SpritePlayer, type SpritePlayerConfig } from './sprite/video-player'
 import { DEFAULT_SHADOW_CONFIG } from './composition/contact-shadow'
 import type { BasePoint } from './composition/anchor-alignment'
+import { mountChromaKeyPreviewDemo } from './pipeline'
 
 /** 测试片段 URL（用户将 WebM-alpha 文件放至 src/renderer/public/test-clip.webm） */
 const TEST_CLIP_SRC = 'test-clip.webm'
@@ -28,6 +32,12 @@ function bootstrap(): void {
 
   // 清空脚手架占位内容
   app.innerHTML = ''
+
+  // 色键抠像预览视图（§5.5，手动验证入口）
+  if (window.location.hash === '#chroma-preview') {
+    window.__chromaKeyPreview = mountChromaKeyPreviewDemo(app)
+    return
+  }
 
   const config: SpritePlayerConfig = {
     clipSrc: TEST_CLIP_SRC,

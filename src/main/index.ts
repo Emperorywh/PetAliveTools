@@ -8,7 +8,7 @@
  */
 
 import { app, BrowserWindow, type Tray } from 'electron'
-import { createPetWindow, setInteractive } from './window'
+import { createPetWindow, createChromaPreviewWindow, setInteractive } from './window'
 import { createTray } from './tray'
 import { registerHideShortcut, unregisterHideShortcut } from './global-shortcut'
 import { ScreenManager } from './screen'
@@ -19,8 +19,16 @@ let screenManager: ScreenManager | null = null
 
 /**
  * 引导全部外壳组件。在 app ready 后调用。
+ *
+ * PETALIVE_VIEW=chroma-preview 时不启动宠物运行时，
+ * 仅创建色键抠像预览工具窗口（§5.5 手动验证入口）。
  */
 function bootstrap(): void {
+  if (process.env['PETALIVE_VIEW'] === 'chroma-preview') {
+    createChromaPreviewWindow()
+    return
+  }
+
   // 1. 创建透明置顶宠物窗口
   mainWindow = createPetWindow()
 
