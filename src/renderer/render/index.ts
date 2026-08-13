@@ -7,3 +7,23 @@
  *
  * 运行于渲染进程。
  */
+
+export { breathingScale, BREATHING_AMPLITUDE, BREATHING_FREQUENCY_HZ } from '../composition/breathing'
+export {
+  type AnchorType,
+  type NormalizedPoint,
+  type SpriteDimensions,
+  type BasePoint,
+  type TranslateOffset,
+  DEFAULT_ANCHOR_POINTS,
+  getAnchorPoint,
+  computeAnchorOffset,
+} from '../composition/anchor-alignment'
+export {
+  type ContactShadowConfig,
+  type ContactShadowStyle,
+  DEFAULT_SHADOW_CONFIG,
+  computeShadowStyle,
+} from '../composition/contact-shadow'
+export { type TransformParams, buildTransform } from '../composition/transform'
+export { type SpritePlayerConfig, SpritePlayer } from '../sprite/video-player'
