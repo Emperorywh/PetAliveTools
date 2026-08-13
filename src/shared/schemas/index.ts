@@ -7,7 +7,7 @@
 
 export { validatePersona, defaultPersonality } from './persona'
 export { validateNeedsState, defaultNeedsState } from './needs-state'
-export { validateBehaviorConfig, defaultBehaviorConfig } from './behavior-config'
+export { validateBehaviorConfig, validateShellSettings, defaultBehaviorConfig, defaultShellSettings } from './behavior-config'
 export { validateClipMeta, validateClipMetaArray } from './clip-meta'
 export { validateAudioMeta, validateAudioMetaArray } from './audio-meta'
 export { validateTrackFile, isTrackFile } from './track-file'

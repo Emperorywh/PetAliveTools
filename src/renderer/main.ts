@@ -18,6 +18,7 @@ import { SpritePlayer, type SpritePlayerConfig } from './sprite/video-player'
 import { DEFAULT_SHADOW_CONFIG } from './composition/contact-shadow'
 import type { BasePoint } from './composition/anchor-alignment'
 import { mountChromaKeyPreviewDemo, mountWalkCorrectionDemo, mountImportWizard } from './pipeline'
+import { mountSettingsPanel } from './settings'
 import { InteractionHandler } from './input/interaction'
 import { AudioPlayer } from './audio'
 import { DEFAULT_AUDIO_VOLUME } from '../shared/audio'
@@ -69,6 +70,12 @@ function bootstrap(): void {
   // 清单引导式导入向导（§5.5，手动验证入口）
   if (window.location.hash === '#import-wizard') {
     window.__importWizard = mountImportWizard(app)
+    return
+  }
+
+  // 设置面板（§12.4）
+  if (window.location.hash === '#settings') {
+    window.__settingsPanel = mountSettingsPanel(app)
     return
   }
 

@@ -128,6 +128,7 @@ describe('loadProject', () => {
         weightOverrides: { idle_sit: { walk: 2.0 } },
         rhythm: { nightStartHour: 23, nightEndHour: 6, nightSleepBoost: 4.0 },
         microRandom: { rateJitter: 0.1, idleJitterSec: 3, signatureProbability: 0.08 },
+        shell: { displayId: 1, screenPercent: 0.18, volume: 0.5, ambientFrequency: 1.5, autoLaunch: false, hideHotkey: 'CommandOrControl+Shift+J' },
       },
       clips: [
         testClip(),

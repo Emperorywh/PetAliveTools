@@ -28,7 +28,7 @@ export interface ProjectData {
 
 export type { Persona, Personality } from './persona'
 export type { NeedsState } from './needs-state'
-export type { BehaviorConfig, RhythmConfig, MicroRandomConfig } from './behavior-config'
+export type { BehaviorConfig, RhythmConfig, MicroRandomConfig, ShellSettings } from './behavior-config'
 export type {
   ClipMeta,
   ClipCategory,

@@ -86,7 +86,7 @@ export function registerImportIpcHandlers(): void {
       // 写入默认 JSON 文件
       await writeJson(paths.persona, { name: petName, symmetrical: true, personality: { liveliness: 0.5, laziness: 0.5, clinginess: 0.5, timidity: 0.5, curiosity: 0.5 } })
       await writeJson(paths.needsState, { hunger: 30, fatigue: 20, happiness: 60, attention: 50 })
-      await writeJson(paths.behaviorConfig, { weightOverrides: {}, rhythm: {}, microRandom: {} })
+      await writeJson(paths.behaviorConfig, { weightOverrides: {}, rhythm: { nightStartHour: 22, nightEndHour: 7, nightSleepBoost: 3.0 }, microRandom: { rateJitter: 0.05, idleJitterSec: 2, signatureProbability: 0.05 }, shell: { displayId: null, screenPercent: 0.15, volume: 0.25, ambientFrequency: 1.0, autoLaunch: true, hideHotkey: 'CommandOrControl+Shift+H' } })
       await writeJson(paths.clipsMeta, [])
       await writeJson(paths.audioMeta, [])
 

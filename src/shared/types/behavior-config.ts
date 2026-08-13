@@ -27,6 +27,27 @@ export interface MicroRandomConfig {
 }
 
 /**
+ * 外壳设置 (§12.4 设置面板)
+ *
+ * 显示器选择、尺度、音量、节律频率、开机自启与快捷键配置。
+ * 存储于 behavior-config.json 的 `shell` 字段。
+ */
+export interface ShellSettings {
+  /** 选定显示器 ID（null = 主显示器，§6.4） */
+  readonly displayId: number | null
+  /** 目标肩高占屏幕高度比例 (§7.4，0–1，默认 0.15) */
+  readonly screenPercent: number
+  /** 音频音量 (0–1，§11.2) */
+  readonly volume: number
+  /** 环境声频率倍率 (§11.1 频率可调，默认 1.0) */
+  readonly ambientFrequency: number
+  /** 开机自启 (§12.4，默认 true) */
+  readonly autoLaunch: boolean
+  /** 隐藏安全阀快捷键 accelerator (§10，默认 "CommandOrControl+Shift+H") */
+  readonly hideHotkey: string
+}
+
+/**
  * FSM 权重覆盖与节律设置 (§12.1 behavior-config.json)
  *
  * weightOverrides: state → { targetState → 权重倍率 }
@@ -42,4 +63,6 @@ export interface BehaviorConfig {
   readonly rhythm: RhythmConfig
   /** 调度微随机化参数 */
   readonly microRandom: MicroRandomConfig
+  /** 外壳设置 (§12.4) */
+  readonly shell: ShellSettings
 }

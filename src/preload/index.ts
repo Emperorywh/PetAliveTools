@@ -4,6 +4,8 @@ import type { TrackFile } from '../shared/types/track-file'
 import type { ProjectData } from '../shared/types/project'
 import type { ImportTranscodeRequest } from '../shared/pipeline/import-flow'
 import type { ImportTranscodeResult } from '../main/pipeline/import-transcoder'
+import type { ShellSettings } from '../shared/types/behavior-config'
+import type { Personality } from '../shared/types/persona'
 
 // Preload script — exposes a controlled API surface to the renderer.
 // IPC channels are wired here as features are implemented.
@@ -63,6 +65,26 @@ export interface ImportBridge {
   ): Promise<{ clipId: string; clipsCount: number }>
 }
 
+/** 设置面板 IPC 桥接接口 (§12.4) */
+export interface SettingsBridge {
+  /** 获取显示器列表 */
+  getDisplays(): Promise<{ id: number; label: string; isPrimary: boolean; scaleFactor: number }[]>
+  /** 获取当前 shell 设置 */
+  getShellSettings(): Promise<ShellSettings>
+  /** 更新 shell 设置（部分字段） */
+  updateShellSettings(changes: Partial<ShellSettings>): Promise<ShellSettings>
+  /** 获取当前性格参数 */
+  getPersonality(): Promise<Personality>
+  /** 更新性格参数（部分维度） */
+  updatePersonality(changes: Partial<Personality>): Promise<Personality>
+  /** 获取当前自启状态 */
+  getAutoLaunch(): Promise<boolean>
+  /** 设置自启 */
+  setAutoLaunch(enabled: boolean): Promise<boolean>
+  /** 重新注册快捷键 */
+  rebindHotkey(accelerator: string): Promise<{ success: boolean; activeAccelerator: string }>
+}
+
 contextBridge.exposeInMainWorld('petalive', {
   version: '0.1.0',
   import: {
@@ -107,4 +129,17 @@ contextBridge.exposeInMainWorld('petalive', {
     },
     toggleMute: () => ipcRenderer.send('audio:toggle-mute'),
   } satisfies AudioBridge,
+  settings: {
+    getDisplays: () => ipcRenderer.invoke('settings:get-displays'),
+    getShellSettings: () => ipcRenderer.invoke('settings:get-shell'),
+    updateShellSettings: (changes: Partial<ShellSettings>) =>
+      ipcRenderer.invoke('settings:update-shell', changes),
+    getPersonality: () => ipcRenderer.invoke('settings:get-personality'),
+    updatePersonality: (changes: Partial<Personality>) =>
+      ipcRenderer.invoke('settings:update-personality', changes),
+    getAutoLaunch: () => ipcRenderer.invoke('settings:get-auto-launch'),
+    setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('settings:set-auto-launch', enabled),
+    rebindHotkey: (accelerator: string) =>
+      ipcRenderer.invoke('settings:rebind-hotkey', accelerator),
+  } satisfies SettingsBridge,
 })

@@ -149,3 +149,25 @@ export function createImportWizardWindow(): BrowserWindow {
   loadToolView(win, 'import-wizard')
   return win
 }
+
+/**
+ * 创建设置面板窗口（§12.4）。
+ *
+ * 承载 #settings 渲染视图：显示器选择、尺度、音量、节律频率、
+ * 性格 5 维滑杆、开机自启开关、快捷键配置。
+ */
+export function createSettingsWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 560,
+    height: 720,
+    minWidth: 480,
+    minHeight: 600,
+    title: '设置（PetAliveTools）',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+    },
+  })
+  loadToolView(win, 'settings')
+  return win
+}

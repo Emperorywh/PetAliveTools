@@ -2,28 +2,38 @@
  * 主进程入口 (main process entry)
  *
  * 负责引导 Electron 应用：创建透明宠物窗口、系统托盘、全局快捷键、
- * 屏幕管理器，并处理生命周期事件。
+ * 屏幕管理器、设置面板，并处理生命周期事件。
  *
  * 运行于主进程。
  */
 
-import { app, BrowserWindow, type Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, type Tray } from 'electron'
 import {
   createPetWindow,
   createChromaPreviewWindow,
   createWalkCorrectionWindow,
   createImportWizardWindow,
-  setInteractive
+  createSettingsWindow,
+  setInteractive,
 } from './window'
 import { createTray } from './tray'
-import { registerHideShortcut, unregisterHideShortcut } from './global-shortcut'
+import {
+  HotkeyManager,
+  DisplayManager,
+  SettingsStore,
+  isAutoLaunchEnabled,
+  setAutoLaunch,
+} from './shell'
 import { ScreenManager } from './screen'
 import { registerImportIpcHandlers } from './pipeline/ipc-handlers'
 import { MouseHandler } from './input/mouse-handler'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
 import type { RhythmConfig } from '../shared/types/behavior-config'
+import type { ShellSettings } from '../shared/types/behavior-config'
+import type { Personality } from '../shared/types/persona'
 import type { NeedsState } from '../shared/types/needs-state'
 import { applyNeedDelta } from './behavior/needs'
+import { clampWindowX, groundedWindowY } from '../shared/spatial'
 
 /** 默认节律配置（§9.3：22–07 夜间） */
 const DEFAULT_RHYTHM: RhythmConfig = {
@@ -40,9 +50,17 @@ const INITIAL_NEEDS: NeedsState = {
   attention: 60,
 }
 
+/** 窗口固定尺寸 (§6.1) */
+const WINDOW_WIDTH = 400
+const SPRITE_BASE_Y = 380
+
 let mainWindow: BrowserWindow | null = null
+let settingsWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let screenManager: ScreenManager | null = null
+let displayManager: DisplayManager | null = null
+let hotkeyManager: HotkeyManager | null = null
+let settingsStore: SettingsStore | null = null
 let mouseHandler: MouseHandler | null = null
 let audioCoordinator: AudioCoordinator | null = null
 let needsState: NeedsState = INITIAL_NEEDS
@@ -51,8 +69,7 @@ let needsState: NeedsState = INITIAL_NEEDS
  * 引导全部外壳组件。在 app ready 后调用。
  *
  * PETALIVE_VIEW=chroma-preview / walk-correction 时不启动宠物运行时，
- * 仅创建对应的入库管线工具窗口（§5.5 抠像预览、§5.3 行走跟踪校正，
- * 均为手动验证入口）。
+ * 仅创建对应的入库管线工具窗口。
  */
 function bootstrap(): void {
   if (process.env['PETALIVE_VIEW'] === 'chroma-preview') {
@@ -68,6 +85,20 @@ function bootstrap(): void {
     return
   }
 
+  // 0. 初始化设置存储 (§12.4)
+  const configDir = app.getPath('userData')
+  settingsStore = new SettingsStore(configDir)
+  // load 是异步的但 IPC 处理器中有 ensureLoaded 兜底
+  settingsStore.load().then(() => {
+    // 应用持久化的 shell 设置
+    const shell = settingsStore!.getShell()
+    // 同步自启状态到系统 (§12.4)
+    setAutoLaunch(shell.autoLaunch)
+    // 同步音量到音频协调器
+    audioCoordinator?.setVolume(shell.volume)
+    audioCoordinator?.setAmbientFrequency(shell.ambientFrequency)
+  })
+
   // 1. 创建透明置顶宠物窗口
   mainWindow = createPetWindow()
 
@@ -76,11 +107,16 @@ function bootstrap(): void {
   const bounds = screenManager.init()
   console.log('[screen] workArea bounds:', bounds)
 
-  screenManager.onDisplayChange((newBounds) => {
-    console.log('[screen] display changed, recalculated bounds:', newBounds)
+  // 3. 多显示器管理 (§6.4、§13)
+  displayManager = new DisplayManager()
+  displayManager.init(null)
+  displayManager.onDisplayChange((event) => {
+    console.log('[display] changed:', event)
+    // 宠物回到可见区域 (§13)
+    movePetToVisibleArea()
   })
 
-  // 3. 系统托盘（§10、§12.4）
+  // 4. 系统托盘（§10、§12.4）
   audioCoordinator = new AudioCoordinator(
     [],
     { rhythmConfig: DEFAULT_RHYTHM },
@@ -122,23 +158,29 @@ function bootstrap(): void {
           mainWindow.show()
         }
       },
-      onSettings: () => console.log('[tray] settings'),
+      onSettings: () => openSettings(),
       onAbout: () => console.log('[tray] about'),
     },
     audioCoordinator.isMuted,
   )
 
-  // 4. 全局快捷键：安全阀隐藏（§10）
-  const registered = registerHideShortcut(() => mainWindow)
-  if (!registered) {
-    console.warn('[shortcut] failed to register Ctrl+Shift+H')
-  }
+  // 5. 可配置全局快捷键：安全阀隐藏 (§10、§12.4)
+  hotkeyManager = new HotkeyManager(() => mainWindow)
+  settingsStore.load().then(() => {
+    const shell = settingsStore!.getShell()
+    const registered = hotkeyManager!.register(shell.hideHotkey)
+    if (!registered) {
+      console.warn(`[shortcut] failed to register ${shell.hideHotkey}`)
+    }
+  })
 
-  // 5. 窗口默认 click-through（已在 createPetWindow 中设置）
-  //    toggle 机制已就绪（setInteractive API），命中盒逻辑由 TASK-012 实现
+  // 6. 注册设置 IPC 处理器 (§12.4)
+  registerSettingsIpc()
+
+  // 7. 窗口默认 click-through（已在 createPetWindow 中设置）
   setInteractive(mainWindow, false)
 
-  // 6. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
+  // 8. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
   mouseHandler = new MouseHandler(
     mainWindow,
     {
@@ -147,7 +189,7 @@ function bootstrap(): void {
         if (mainWindow.isVisible()) mainWindow.hide()
         else mainWindow.show()
       },
-      onSettings: () => console.log('[input] settings'),
+      onSettings: () => openSettings(),
       onAbout: () => console.log('[input] about'),
       onFeed: () => {
         needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
@@ -156,16 +198,125 @@ function bootstrap(): void {
         needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
       },
     },
-    { windowWidth: 400, spriteBaseY: 380 },
+    { windowWidth: WINDOW_WIDTH, spriteBaseY: SPRITE_BASE_Y },
   )
   if (audioCoordinator) {
     mouseHandler.setAudioCoordinator(audioCoordinator)
   }
 
-  // 防止窗口被关闭时退出（frameless 无关闭按钮，但 Alt+F4 可能触发）
+  // 防止窗口被关闭时退出
   mainWindow.on('close', (e) => {
     e.preventDefault()
     mainWindow?.hide()
+  })
+}
+
+/**
+ * 打开设置面板窗口 (§12.4)。
+ * 如果已有打开的设置窗口则聚焦，否则创建新窗口。
+ */
+function openSettings(): void {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus()
+    return
+  }
+  settingsWindow = createSettingsWindow()
+  settingsWindow.on('closed', () => {
+    settingsWindow = null
+  })
+}
+
+/**
+ * 将宠物窗口校正到当前显示器可见区域 (§13)。
+ *
+ * 在显示器变化时调用：重新计算地面线，钳制 x 坐标。
+ */
+function movePetToVisibleArea(): void {
+  if (!mainWindow || mainWindow.isDestroyed() || !displayManager) return
+  const bounds = displayManager.getBounds()
+  const currentX = mainWindow.getPosition()[0]
+  const x = clampWindowX(bounds, currentX, WINDOW_WIDTH)
+  const y = groundedWindowY(bounds.groundLine, SPRITE_BASE_Y)
+  mainWindow.setPosition(Math.round(x), Math.round(y), false)
+}
+
+/**
+ * 注册设置面板 IPC 处理器 (§12.4)。
+ */
+function registerSettingsIpc(): void {
+  ipcMain.handle('settings:get-displays', () => {
+    if (!displayManager) return []
+    return displayManager.enumerate().map((d) => ({
+      id: d.id,
+      label: d.label,
+      isPrimary: d.isPrimary,
+      scaleFactor: d.scaleFactor,
+    }))
+  })
+
+  ipcMain.handle('settings:get-shell', async () => {
+    if (!settingsStore) return null
+    await settingsStore.load()
+    return settingsStore.getShell()
+  })
+
+  ipcMain.handle('settings:update-shell', async (_e, changes: Partial<ShellSettings>) => {
+    if (!settingsStore) return null
+    await settingsStore.load()
+    const updated = await settingsStore.updateShell(changes)
+
+    // 应用变更到运行时子系统
+    if (changes.displayId !== undefined && displayManager) {
+      displayManager.selectDisplay(changes.displayId)
+      movePetToVisibleArea()
+    }
+    if (changes.volume !== undefined && audioCoordinator) {
+      audioCoordinator.setVolume(changes.volume)
+    }
+    if (changes.ambientFrequency !== undefined && audioCoordinator) {
+      audioCoordinator.setAmbientFrequency(changes.ambientFrequency)
+    }
+    if (changes.autoLaunch !== undefined) {
+      setAutoLaunch(changes.autoLaunch)
+    }
+    if (changes.hideHotkey !== undefined && hotkeyManager) {
+      const result = hotkeyManager.reregister(changes.hideHotkey)
+      return { ...updated, hideHotkey: result.activeAccelerator }
+    }
+    return updated
+  })
+
+  ipcMain.handle('settings:get-personality', async () => {
+    if (!settingsStore) return null
+    await settingsStore.load()
+    return settingsStore.getPersonality()
+  })
+
+  ipcMain.handle('settings:update-personality', async (_e, changes: Partial<Personality>) => {
+    if (!settingsStore) return null
+    await settingsStore.load()
+    return settingsStore.updatePersonality(changes)
+  })
+
+  ipcMain.handle('settings:get-auto-launch', () => {
+    return isAutoLaunchEnabled()
+  })
+
+  ipcMain.handle('settings:set-auto-launch', (_e, enabled: boolean) => {
+    setAutoLaunch(enabled)
+    return isAutoLaunchEnabled()
+  })
+
+  ipcMain.handle('settings:rebind-hotkey', async (_e, accelerator: string) => {
+    if (!hotkeyManager || !settingsStore) {
+      return { success: false, activeAccelerator: '' }
+    }
+    const result = hotkeyManager.reregister(accelerator)
+    if (result.success) {
+      await settingsStore.load()
+      await settingsStore.updateShell({ hideHotkey: result.activeAccelerator! })
+    }
+    return { success: result.success, activeAccelerator: result.activeAccelerator ?? '' }
   })
 }
 
@@ -183,8 +334,9 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
-  unregisterHideShortcut()
+  hotkeyManager?.dispose()
   screenManager?.dispose()
+  displayManager?.dispose()
   audioCoordinator?.dispose()
 })
 
