@@ -36,6 +36,18 @@ export interface MouseHandlerCallbacks {
   onSettings: () => void
   /** 关于 */
   onAbout: () => void
+  /** 喂食后的需求变更回调 (§10 饥饿↓愉悦↑)，在片段抢占+音频触发后调用 */
+  onFeed?: () => void
+  /** 给玩具后的需求变更回调 (§10 愉悦↑注意力↑) */
+  onToy?: () => void
+}
+
+/** 音频协调器接口（最小依赖，便于解耦注入） */
+export interface AudioCoordinatorLike {
+  onActionTriggered(action: string, clip: import('../../shared/types/clip-meta').ClipMeta | null): void
+  onEmbeddedAudioEnded(): void
+  toggleMute(): boolean
+  readonly isMuted: boolean
 }
 
 /** IPC 频道名 */
@@ -46,6 +58,7 @@ const IPC = {
   endPreempt: 'input:end-preempt',
   dragMove: 'input:drag-move',
   contextMenu: 'input:context-menu',
+  toggleMute: 'audio:toggle-mute',
 } as const
 
 /**
@@ -58,6 +71,7 @@ const IPC = {
  */
 export class MouseHandler {
   private scheduler: { preempt(state: string, nowMs: number): unknown; endPreempt(nowMs: number): unknown } | null = null
+  private audio: AudioCoordinatorLike | null = null
   private dragState: DragState | null = null
 
   constructor(
@@ -73,6 +87,11 @@ export class MouseHandler {
     this.scheduler = scheduler
   }
 
+  /** 注入音频协调器（就绪后调用） */
+  setAudioCoordinator(audio: AudioCoordinatorLike): void {
+    this.audio = audio
+  }
+
   private registerIpc(): void {
     ipcMain.on(IPC.enterInteractive, () => {
       if (!this.window.isDestroyed()) setInteractive(this.window, true)
@@ -85,11 +104,13 @@ export class MouseHandler {
     ipcMain.on(IPC.preempt, (_e, interaction: string) => {
       if (interaction === 'dragged') this.startDrag()
       this.scheduler?.preempt(interaction, Date.now())
+      this.audio?.onActionTriggered(interaction, null)
     })
 
     ipcMain.on(IPC.endPreempt, () => {
       this.endDrag()
       this.scheduler?.endPreempt(Date.now())
+      this.audio?.onEmbeddedAudioEnded()
     })
 
     ipcMain.on(IPC.dragMove, (_e, x: number, y: number) => {
@@ -98,6 +119,10 @@ export class MouseHandler {
 
     ipcMain.on(IPC.contextMenu, () => {
       this.handleContextMenu()
+    })
+
+    ipcMain.on(IPC.toggleMute, () => {
+      this.handleToggleMute()
     })
   }
 
@@ -157,13 +182,34 @@ export class MouseHandler {
 
   private handleContextMenu(): void {
     if (this.window.isDestroyed()) return
-    showContextMenu(this.window, {
-      onFeed: () => this.scheduler?.preempt('eat', Date.now()),
-      onToy: () => this.scheduler?.preempt('play', Date.now()),
-      onHide: () => this.callbacks.onHide(),
-      onSettings: () => this.callbacks.onSettings(),
-      onAbout: () => this.callbacks.onAbout(),
-    })
+    showContextMenu(
+      this.window,
+      {
+        onFeed: () => {
+          this.scheduler?.preempt('eat', Date.now())
+          this.audio?.onActionTriggered('eat', null)
+          this.callbacks.onFeed?.()
+        },
+        onToy: () => {
+          this.scheduler?.preempt('play', Date.now())
+          this.audio?.onActionTriggered('play', null)
+          this.callbacks.onToy?.()
+        },
+        onToggleMute: () => this.handleToggleMute(),
+        onHide: () => this.callbacks.onHide(),
+        onSettings: () => this.callbacks.onSettings(),
+        onAbout: () => this.callbacks.onAbout(),
+      },
+      this.audio?.isMuted ?? false,
+    )
+  }
+
+  /** 切换全局静音 (§11.2)：通知渲染进程更新状态 */
+  private handleToggleMute(): void {
+    const muted = this.audio?.toggleMute() ?? false
+    if (!this.window.isDestroyed()) {
+      this.window.webContents.send('audio:set-muted', muted)
+    }
   }
 
   /** 清理 IPC 监听 */

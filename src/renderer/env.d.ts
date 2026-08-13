@@ -6,6 +6,7 @@ declare global {
       version: string
       import: import('../preload').ImportBridge
       input: import('../preload').InputBridge
+      audio: import('../preload').AudioBridge
     }
     /** 精灵播放器实例（开发调试用） */
     __spritePlayer: import('./sprite/video-player').SpritePlayer | undefined
@@ -17,5 +18,7 @@ declare global {
     __importWizard: import('./pipeline/import-wizard').ImportWizard | undefined
     /** 交互处理器实例（开发调试用） */
     __interaction: import('./input/interaction').InteractionHandler | undefined
+    /** 音频播放器实例（开发调试用） */
+    __audioPlayer: import('./audio/player').AudioPlayer | undefined
   }
 }

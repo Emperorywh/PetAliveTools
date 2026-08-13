@@ -15,6 +15,8 @@ export interface ContextMenuCallbacks {
   onFeed: () => void
   /** 给玩具（触发 play 片段，道具类 §8.4，愉悦↑） */
   onToy: () => void
+  /** 切换静音 (§11.2 全局静音开关) */
+  onToggleMute: () => void
   /** 暂时隐藏（安全阀的另一入口，§10） */
   onHide: () => void
   /** 设置面板（TASK-015） */
@@ -29,16 +31,24 @@ export interface ContextMenuCallbacks {
  * 菜单结构：
  *   喂食
  *   给玩具
+ *   静音/取消静音
  *   ────────
  *   隐藏
  *   设置
  *   ────────
  *   关于
+ *
+ * @param isMuted 当前是否已静音（用于菜单标签切换）
  */
-export function showContextMenu(win: BrowserWindow, callbacks: ContextMenuCallbacks): void {
+export function showContextMenu(
+  win: BrowserWindow,
+  callbacks: ContextMenuCallbacks,
+  isMuted = false,
+): void {
   const menu = Menu.buildFromTemplate([
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
+    { label: isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
     { type: 'separator' },
     { label: '隐藏', click: () => callbacks.onHide() },
     { label: '设置', click: () => callbacks.onSettings() },

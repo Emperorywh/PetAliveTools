@@ -16,6 +16,8 @@ export interface TrayMenuCallbacks {
   onFeed: () => void
   /** 给玩具（触发 play 片段） */
   onToy: () => void
+  /** 切换静音 (§11.2 全局静音开关) */
+  onToggleMute: () => void
   /** 暂时隐藏（安全阀的另一入口，§10） */
   onToggleHide: () => void
   /** 设置面板（TASK-015） */
@@ -30,14 +32,17 @@ export interface TrayMenuCallbacks {
  * 菜单结构（§10）：
  *   喂食
  *   给玩具
+ *   静音/取消静音
  *   ────────
  *   隐藏
  *   设置
  *   ────────
  *   关于
  *   退出
+ *
+ * @param isMuted 当前是否已静音（用于菜单标签切换）
  */
-export function createTray(callbacks: TrayMenuCallbacks): Tray {
+export function createTray(callbacks: TrayMenuCallbacks, isMuted = false): Tray {
   const iconPath = join(__dirname, '../../resources/tray-icon.png')
   const icon = nativeImage.createFromPath(iconPath)
 
@@ -47,6 +52,7 @@ export function createTray(callbacks: TrayMenuCallbacks): Tray {
   const contextMenu = Menu.buildFromTemplate([
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
+    { label: isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
     { type: 'separator' },
     { label: '隐藏', click: () => callbacks.onToggleHide() },
     { label: '设置', click: () => callbacks.onSettings() },

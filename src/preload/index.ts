@@ -24,6 +24,20 @@ export interface InputBridge {
   contextMenu(): void
 }
 
+/** 音频 IPC 桥接接口 (§11) */
+export interface AudioBridge {
+  /** 监听主进程播放声效指令 (§11.1) */
+  onPlaySound(callback: (file: string, volume: number) => void): void
+  /** 监听内嵌音频开始 (§11.1 embeddedAudio) */
+  onEmbeddedStart(callback: () => void): void
+  /** 监听内嵌音频结束 (§11.1 embeddedAudio) */
+  onEmbeddedStop(callback: () => void): void
+  /** 监听全局静音状态变更 (§11.2) */
+  onSetMuted(callback: (muted: boolean) => void): void
+  /** 请求切换静音（渲染→主进程，如快捷键入口） */
+  toggleMute(): void
+}
+
 /** 导入向导 IPC 桥接接口 */
 export interface ImportBridge {
   /** 选择已有项目目录 */
@@ -76,4 +90,21 @@ contextBridge.exposeInMainWorld('petalive', {
     dragMove: (x: number, y: number) => ipcRenderer.send('input:drag-move', x, y),
     contextMenu: () => ipcRenderer.send('input:context-menu'),
   } satisfies InputBridge,
+  audio: {
+    onPlaySound: (callback: (file: string, volume: number) => void) => {
+      const handler = (_e: unknown, file: string, volume: number): void => callback(file, volume)
+      ipcRenderer.on('audio:play', handler)
+    },
+    onEmbeddedStart: (callback: () => void) => {
+      ipcRenderer.on('audio:embedded-start', () => callback())
+    },
+    onEmbeddedStop: (callback: () => void) => {
+      ipcRenderer.on('audio:embedded-stop', () => callback())
+    },
+    onSetMuted: (callback: (muted: boolean) => void) => {
+      const handler = (_e: unknown, muted: boolean): void => callback(muted)
+      ipcRenderer.on('audio:set-muted', handler)
+    },
+    toggleMute: () => ipcRenderer.send('audio:toggle-mute'),
+  } satisfies AudioBridge,
 })

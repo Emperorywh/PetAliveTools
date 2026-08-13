@@ -1,8 +1,12 @@
 /**
- * 音频模块 (audio)
+ * 音频模块 (audio) — 渲染进程
  *
- * 负责：节律随机环境声（昼夜节律）、动作触发声、防噪音策略（冷却/上限）、embeddedAudio 音画同步。
- * 参见 SPEC §4.8 (音频采集规范) 与 §11 (音频设计)。
+ * 负责：实际声音播放 (AudioPlayer)、音量与静音控制 (§11.2)、
+ * embeddedAudio 音画同步 (§4.8, §11.1)。
+ * 参见 SPEC §11 (音频设计)。
  *
  * 运行于渲染进程。
  */
+
+export { AudioPlayer } from './player'
+export type { AudioPlayerConfig } from './player'

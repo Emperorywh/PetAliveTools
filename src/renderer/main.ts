@@ -19,6 +19,8 @@ import { DEFAULT_SHADOW_CONFIG } from './composition/contact-shadow'
 import type { BasePoint } from './composition/anchor-alignment'
 import { mountChromaKeyPreviewDemo, mountWalkCorrectionDemo, mountImportWizard } from './pipeline'
 import { InteractionHandler } from './input/interaction'
+import { AudioPlayer } from './audio'
+import { DEFAULT_AUDIO_VOLUME } from '../shared/audio'
 import { hitboxToPixels, DEFAULT_BUFFER_PX } from '../shared/input'
 import type { Hitbox } from '../shared/types/clip-meta'
 
@@ -83,6 +85,30 @@ function bootstrap(): void {
   const player = new SpritePlayer(app, config)
   player.startBreathing()
 
+  // 音频播放器 (§11)：接收主进程 IPC 指令播放声效
+  const audioPlayer = new AudioPlayer({
+    audioBaseUrl: 'audio',
+    defaultVolume: DEFAULT_AUDIO_VOLUME,
+  })
+  const audioBridge = window.petalive?.audio
+  if (audioBridge) {
+    audioBridge.onPlaySound((file, volume) => {
+      audioPlayer.setVolume(volume)
+      audioPlayer.playSound(file)
+    })
+    audioBridge.onEmbeddedStart(() => {
+      const video = app.querySelector('video')
+      if (video) audioPlayer.enableEmbeddedAudio(video)
+    })
+    audioBridge.onEmbeddedStop(() => {
+      const video = app.querySelector('video')
+      if (video) audioPlayer.disableEmbeddedAudio(video)
+    })
+    audioBridge.onSetMuted((muted) => {
+      audioPlayer.setMuted(muted)
+    })
+  }
+
   // 交互处理器：命中盒检测、穿透/交互切换、抚摸/点击/拖拽/右键菜单 (§10)
   const hitboxPx = hitboxToPixels(DEFAULT_HITBOX, {
     x: 0,
@@ -103,6 +129,7 @@ function bootstrap(): void {
   // 暴露至全局，便于开发时手动调试（VERIFY-002 手动验证时可用于切换阴影/镜像）
   window.__spritePlayer = player
   window.__interaction = interaction
+  window.__audioPlayer = audioPlayer
 }
 
 // DOM 就绪后引导
