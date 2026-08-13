@@ -12,11 +12,13 @@ import {
   createPetWindow,
   createChromaPreviewWindow,
   createWalkCorrectionWindow,
+  createImportWizardWindow,
   setInteractive
 } from './window'
 import { createTray } from './tray'
 import { registerHideShortcut, unregisterHideShortcut } from './global-shortcut'
 import { ScreenManager } from './screen'
+import { registerImportIpcHandlers } from './pipeline/ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -36,6 +38,10 @@ function bootstrap(): void {
   }
   if (process.env['PETALIVE_VIEW'] === 'walk-correction') {
     createWalkCorrectionWindow()
+    return
+  }
+  if (process.env['PETALIVE_VIEW'] === 'import-wizard') {
+    createImportWizardWindow()
     return
   }
 
@@ -85,6 +91,9 @@ function bootstrap(): void {
 }
 
 app.whenReady().then(() => {
+  // 注册导入向导 IPC 处理器 (§5.5)
+  registerImportIpcHandlers()
+
   bootstrap()
 
   app.on('activate', () => {

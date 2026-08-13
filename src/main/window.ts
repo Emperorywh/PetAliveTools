@@ -126,3 +126,26 @@ function loadToolView(win: BrowserWindow, view: string): void {
     win.loadFile(join(__dirname, '../renderer/index.html'), { hash: view })
   }
 }
+
+/**
+ * 创建清单引导式导入向导窗口（§5.5）。
+ *
+ * 承载 #import-wizard 渲染视图：清单展示 + 分步导入流程（选视频→
+ * 背景参考色→抠像预览→裁剪/标 loop→行走跟踪校正→填标签→转码入库）。
+ * 由主进程在 PETALIVE_VIEW=import-wizard 时创建。
+ */
+export function createImportWizardWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 860,
+    minWidth: 960,
+    minHeight: 680,
+    title: '清单引导式导入（PetAliveTools）',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+    },
+  })
+  loadToolView(win, 'import-wizard')
+  return win
+}

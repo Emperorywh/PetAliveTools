@@ -17,7 +17,7 @@
 import { SpritePlayer, type SpritePlayerConfig } from './sprite/video-player'
 import { DEFAULT_SHADOW_CONFIG } from './composition/contact-shadow'
 import type { BasePoint } from './composition/anchor-alignment'
-import { mountChromaKeyPreviewDemo, mountWalkCorrectionDemo } from './pipeline'
+import { mountChromaKeyPreviewDemo, mountWalkCorrectionDemo, mountImportWizard } from './pipeline'
 
 /** 测试片段 URL（用户将 WebM-alpha 文件放至 src/renderer/public/test-clip.webm） */
 const TEST_CLIP_SRC = 'test-clip.webm'
@@ -46,6 +46,12 @@ function bootstrap(): void {
   // 行走跟踪裁切 + 位移曲线校正视图（§5.3，手动验证入口）
   if (window.location.hash === '#walk-correction') {
     window.__walkCorrection = mountWalkCorrectionDemo(app)
+    return
+  }
+
+  // 清单引导式导入向导（§5.5，手动验证入口）
+  if (window.location.hash === '#import-wizard') {
+    window.__importWizard = mountImportWizard(app)
     return
   }
 

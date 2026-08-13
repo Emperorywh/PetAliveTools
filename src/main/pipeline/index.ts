@@ -101,3 +101,15 @@ export {
   buildTranscodeOptions,
   transcodeClip
 } from './transcoder'
+export {
+  type ImportTranscodeOptions,
+  type ImportTranscodeResult,
+  buildImportTranscodeOptions,
+  buildImportFfmpegArgs,
+  transcodeImport
+} from './import-transcoder'
+export {
+  IPC,
+  registerImportIpcHandlers,
+  appendClipToProject
+} from './ipc-handlers'
