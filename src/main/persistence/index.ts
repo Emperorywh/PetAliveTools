@@ -25,3 +25,25 @@ export {
   buildClipLookup,
   isPlaceholderClip,
 } from './placeholder'
+
+export {
+  ProfileManager,
+  DEFAULT_PROFILE_NAME,
+  sanitizeProfileId,
+  loadNeedsStateOrDefault,
+  saveNeedsState,
+} from './profiles'
+export type { ProfileSummary } from './profiles'
+
+export {
+  collectProjectFiles,
+  exportProjectToZip,
+  findCommonRootDir,
+  normalizeZipEntries,
+  validateProjectEntries,
+  importProjectFromZip,
+} from './backup'
+export type { ExportResult, ImportResult } from './backup'
+
+export { createZipArchive, readZipArchive, crc32 } from './zip'
+export type { ZipEntry } from './zip'

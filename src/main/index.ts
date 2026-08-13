@@ -7,7 +7,8 @@
  * 运行于主进程。
  */
 
-import { app, BrowserWindow, ipcMain, type Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, type Tray } from 'electron'
+import { join } from 'node:path'
 import {
   createPetWindow,
   createChromaPreviewWindow,
@@ -16,18 +17,28 @@ import {
   createSettingsWindow,
   setInteractive,
 } from './window'
-import { createTray } from './tray'
+import { createTray, rebuildTrayMenu } from './tray'
 import {
   HotkeyManager,
   DisplayManager,
   SettingsStore,
+  ProfileSwitcher,
   isAutoLaunchEnabled,
   setAutoLaunch,
+  type FileDialogs,
+  type TrayMenuCallbacks,
 } from './shell'
 import { ScreenManager } from './screen'
 import { registerImportIpcHandlers } from './pipeline/ipc-handlers'
 import { MouseHandler } from './input/mouse-handler'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
+import {
+  ProfileManager,
+  loadNeedsStateOrDefault,
+  saveNeedsState,
+  loadProject,
+} from './persistence'
+import type { ProfileSummary } from './persistence'
 import type { RhythmConfig } from '../shared/types/behavior-config'
 import type { ShellSettings } from '../shared/types/behavior-config'
 import type { Personality } from '../shared/types/persona'
@@ -63,6 +74,9 @@ let hotkeyManager: HotkeyManager | null = null
 let settingsStore: SettingsStore | null = null
 let mouseHandler: MouseHandler | null = null
 let audioCoordinator: AudioCoordinator | null = null
+let profileManager: ProfileManager | null = null
+let profileSwitcher: ProfileSwitcher | null = null
+let activeProfile: ProfileSummary | null = null
 let needsState: NeedsState = INITIAL_NEEDS
 
 /**
@@ -71,7 +85,7 @@ let needsState: NeedsState = INITIAL_NEEDS
  * PETALIVE_VIEW=chroma-preview / walk-correction 时不启动宠物运行时，
  * 仅创建对应的入库管线工具窗口。
  */
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
   if (process.env['PETALIVE_VIEW'] === 'chroma-preview') {
     createChromaPreviewWindow()
     return
@@ -85,18 +99,25 @@ function bootstrap(): void {
     return
   }
 
-  // 0. 初始化设置存储 (§12.4)
-  const configDir = app.getPath('userData')
-  settingsStore = new SettingsStore(configDir)
-  // load 是异步的但 IPC 处理器中有 ensureLoaded 兜底
-  settingsStore.load().then(() => {
-    // 应用持久化的 shell 设置
-    const shell = settingsStore!.getShell()
-    // 同步自启状态到系统 (§12.4)
-    setAutoLaunch(shell.autoLaunch)
-    // 同步音量到音频协调器
-    audioCoordinator?.setVolume(shell.volume)
-    audioCoordinator?.setAmbientFrequency(shell.ambientFrequency)
+  // 0. 初始化多宠物 profile 与设置存储 (§12.2、§12.4)
+  //    pets 根目录下每个子目录是一个 §12.1 项目；设置随项目存储
+  const userData = app.getPath('userData')
+  profileManager = new ProfileManager(join(userData, 'pets'), join(userData, 'profiles.json'))
+  await profileManager.ensureRoot()
+  activeProfile = await profileManager.ensureActiveProfile()
+  settingsStore = new SettingsStore(activeProfile.dir)
+  await settingsStore.load()
+  needsState = await loadNeedsStateOrDefault(activeProfile.dir)
+
+  // Profile 切换器：托盘宠物管理操作与外壳运行时之间的桥梁 (§12.2、§12.3)
+  profileSwitcher = new ProfileSwitcher(profileManager, createFileDialogs(), {
+    onActiveProfileChanged: (profile) => {
+      void handleActiveProfileChanged(profile)
+    },
+    onProfilesChanged: () => {
+      void refreshTrayMenu()
+    },
+    onNotify: (message) => console.log('[profile]', message),
   })
 
   // 1. 创建透明置顶宠物窗口
@@ -116,7 +137,7 @@ function bootstrap(): void {
     movePetToVisibleArea()
   })
 
-  // 4. 系统托盘（§10、§12.4）
+  // 4. 音频协调器（§11）：应用当前宠物的 shell 设置
   audioCoordinator = new AudioCoordinator(
     [],
     { rhythmConfig: DEFAULT_RHYTHM },
@@ -133,54 +154,27 @@ function bootstrap(): void {
     },
   )
   audioCoordinator.start()
+  const shell0 = settingsStore.getShell()
+  audioCoordinator.setVolume(shell0.volume)
+  audioCoordinator.setAmbientFrequency(shell0.ambientFrequency)
 
-  tray = createTray(
-    {
-      onFeed: () => {
-        audioCoordinator?.onActionTriggered('eat', null)
-        needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
-      },
-      onToy: () => {
-        audioCoordinator?.onActionTriggered('play', null)
-        needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
-      },
-      onToggleMute: () => {
-        const muted = audioCoordinator?.toggleMute() ?? false
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('audio:set-muted', muted)
-        }
-      },
-      onToggleHide: () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return
-        if (mainWindow.isVisible()) {
-          mainWindow.hide()
-        } else {
-          mainWindow.show()
-        }
-      },
-      onSettings: () => openSettings(),
-      onAbout: () => console.log('[tray] about'),
-    },
-    audioCoordinator.isMuted,
-  )
+  // 5. 系统托盘（§10、§12.2、§12.4）
+  tray = createTray(trayCallbacks())
+  await refreshTrayMenu()
 
-  // 5. 可配置全局快捷键：安全阀隐藏 (§10、§12.4)
+  // 6. 可配置全局快捷键：安全阀隐藏 (§10、§12.4)
   hotkeyManager = new HotkeyManager(() => mainWindow)
-  settingsStore.load().then(() => {
-    const shell = settingsStore!.getShell()
-    const registered = hotkeyManager!.register(shell.hideHotkey)
-    if (!registered) {
-      console.warn(`[shortcut] failed to register ${shell.hideHotkey}`)
-    }
-  })
+  if (!hotkeyManager.register(settingsStore.getShell().hideHotkey)) {
+    console.warn(`[shortcut] failed to register ${settingsStore.getShell().hideHotkey}`)
+  }
 
-  // 6. 注册设置 IPC 处理器 (§12.4)
+  // 7. 注册设置 IPC 处理器 (§12.4)
   registerSettingsIpc()
 
-  // 7. 窗口默认 click-through（已在 createPetWindow 中设置）
+  // 8. 窗口默认 click-through（已在 createPetWindow 中设置）
   setInteractive(mainWindow, false)
 
-  // 8. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
+  // 9. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
   mouseHandler = new MouseHandler(
     mainWindow,
     {
@@ -193,9 +187,11 @@ function bootstrap(): void {
       onAbout: () => console.log('[input] about'),
       onFeed: () => {
         needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
+        void persistNeedsState()
       },
       onToy: () => {
         needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
+        void persistNeedsState()
       },
     },
     { windowWidth: WINDOW_WIDTH, spriteBaseY: SPRITE_BASE_Y },
@@ -209,6 +205,142 @@ function bootstrap(): void {
     e.preventDefault()
     mainWindow?.hide()
   })
+}
+
+/** 托盘菜单回调（§10、§12.2、§12.3） */
+function trayCallbacks(): TrayMenuCallbacks {
+  return {
+    onFeed: () => {
+      audioCoordinator?.onActionTriggered('eat', null)
+      needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
+      void persistNeedsState()
+    },
+    onToy: () => {
+      audioCoordinator?.onActionTriggered('play', null)
+      needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
+      void persistNeedsState()
+    },
+    onToggleMute: async () => {
+      const muted = audioCoordinator?.toggleMute() ?? false
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('audio:set-muted', muted)
+      }
+      await refreshTrayMenu()
+    },
+    onToggleHide: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (mainWindow.isVisible()) {
+        mainWindow.hide()
+      } else {
+        mainWindow.show()
+      }
+    },
+    onSettings: () => openSettings(),
+    onAbout: () => console.log('[tray] about'),
+    onSwitchProfile: (id) => {
+      void profileSwitcher?.switchProfile(id)
+    },
+    onImportProfile: () => {
+      void profileSwitcher?.importProfile()
+    },
+    onExportProfile: () => {
+      void profileSwitcher?.exportActiveProfile()
+    },
+    onDeleteProfile: (id) => {
+      void profileSwitcher?.deleteProfile(id)
+    },
+  }
+}
+
+/** 以当前 profile 列表与静音状态重建托盘菜单 (§12.2) */
+async function refreshTrayMenu(): Promise<void> {
+  if (!tray || !profileSwitcher) return
+  const state = await profileSwitcher.getMenuState(audioCoordinator?.isMuted ?? false)
+  rebuildTrayMenu(tray, state, trayCallbacks())
+}
+
+/** 将当前需求状态持久化到活跃宠物的项目目录 (§12.2 状态独立) */
+async function persistNeedsState(): Promise<void> {
+  if (!activeProfile) return
+  try {
+    await saveNeedsState(activeProfile.dir, needsState)
+  } catch (err) {
+    console.warn('[needs] failed to save needs-state:', err)
+  }
+}
+
+/**
+ * 活跃宠物变化处理 (§12.2)：
+ * 保存旧宠物需求状态 → 加载新宠物项目数据 → 重建设置存储 → 通知渲染进程。
+ */
+async function handleActiveProfileChanged(profile: ProfileSummary | null): Promise<void> {
+  // 1. 保存旧宠物的需求状态（切换后互不影响）
+  await persistNeedsState()
+  activeProfile = profile
+
+  if (profile === null) {
+    needsState = INITIAL_NEEDS
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+    await refreshTrayMenu()
+    return
+  }
+
+  // 2. 加载选中宠物的项目数据（persona / needs / clips / audio）
+  try {
+    const data = await loadProject(profile.dir)
+    needsState = data.needsState
+    console.log(
+      `[profile] active="${profile.name}" clips=${data.clips.length} audio=${data.audio.length}`,
+    )
+  } catch (err) {
+    console.warn(`[profile] invalid project "${profile.id}", using defaults:`, err)
+    needsState = await loadNeedsStateOrDefault(profile.dir)
+  }
+
+  // 3. 设置存储指向新宠物项目目录（persona/behavior-config 为项目内文件 §12.1）
+  settingsStore = new SettingsStore(profile.dir)
+  await settingsStore.load()
+  const shell = settingsStore.getShell()
+  setAutoLaunch(shell.autoLaunch)
+  audioCoordinator?.setVolume(shell.volume)
+  audioCoordinator?.setAmbientFrequency(shell.ambientFrequency)
+  if (hotkeyManager) {
+    hotkeyManager.reregister(shell.hideHotkey)
+  }
+
+  // 4. 设置面板展示的是旧宠物数据，切换后关闭
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.close()
+  }
+
+  // 5. 通知渲染进程宠物已切换
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('profile:switched', profile.id, profile.name)
+  }
+
+  await refreshTrayMenu()
+}
+
+/** 导入/导出用文件对话框 (§12.3) */
+function createFileDialogs(): FileDialogs {
+  return {
+    showSaveZipDialog: async (defaultPath) => {
+      const result = await dialog.showSaveDialog({
+        title: '导出宠物项目',
+        defaultPath,
+        filters: [{ name: 'ZIP 归档', extensions: ['zip'] }],
+      })
+      return result.canceled || !result.filePath ? null : result.filePath
+    },
+    showOpenZipDialog: async () => {
+      const result = await dialog.showOpenDialog({
+        title: '导入宠物项目',
+        properties: ['openFile'],
+        filters: [{ name: 'ZIP 归档', extensions: ['zip'] }],
+      })
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
+    },
+  }
 }
 
 /**
@@ -324,11 +456,11 @@ app.whenReady().then(() => {
   // 注册导入向导 IPC 处理器 (§5.5)
   registerImportIpcHandlers()
 
-  bootstrap()
+  bootstrap().catch((err) => console.error('[bootstrap] failed:', err))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      bootstrap()
+      bootstrap().catch((err) => console.error('[bootstrap] failed:', err))
     }
   })
 })
@@ -341,6 +473,9 @@ app.on('will-quit', () => {
 })
 
 app.on('before-quit', () => {
+  // 保存当前宠物的需求状态（§12.2 跨会话持久化）
+  void persistNeedsState()
+
   // 允许窗口真正关闭（解除 close → hide 拦截）
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.removeAllListeners('close')

@@ -35,3 +35,15 @@ export {
   mergeShellSettings,
   mergePersonality,
 } from './settings-store'
+
+export {
+  buildProfileMenuSection,
+  buildTrayTemplate,
+  ProfileSwitcher,
+} from './profile-switcher'
+export type {
+  TrayMenuCallbacks,
+  TrayMenuState,
+  FileDialogs,
+  ProfileSwitcherHost,
+} from './profile-switcher'
