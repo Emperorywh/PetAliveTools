@@ -9,6 +9,8 @@
 
 import { app, BrowserWindow, ipcMain, dialog, type Tray } from 'electron'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { promises as fs } from 'node:fs'
 import {
   createPetWindow,
   createChromaPreviewWindow,
@@ -37,13 +39,33 @@ import {
   loadNeedsStateOrDefault,
   saveNeedsState,
   loadProject,
+  isPlaceholderClip,
 } from './persistence'
+import { getProjectPaths } from './persistence/project-io'
 import type { ProfileSummary } from './persistence'
 import type { RhythmConfig } from '../shared/types/behavior-config'
 import type { ShellSettings } from '../shared/types/behavior-config'
 import type { Personality } from '../shared/types/persona'
 import type { NeedsState } from '../shared/types/needs-state'
-import { applyNeedDelta } from './behavior/needs'
+import type { ClipMeta } from '../shared/types/clip-meta'
+import type { TrackFile } from '../shared/types/track-file'
+import type { ProjectData } from '../shared/types/project'
+import { applyNeedDelta, advanceNeeds, DEFAULT_NEED_RATES, needWeightModifiers, type NeedRates } from './behavior/needs'
+import {
+  personalityNeedRates,
+  personalityWeightModifiers,
+} from './behavior/personality'
+import { currentHour, rhythmWeightModifiers, rhythmNeedRates, isNightTime } from './behavior/rhythm'
+import { advanceOffline, computeOfflineSec } from './behavior/offline-progression'
+import { BehaviorFsm } from './behavior/fsm'
+import { createSeededRandom } from './behavior/transitions'
+import { trackFileName, readTrackFile } from './pipeline/track-file'
+import {
+  ClipScheduler,
+  type ClipSchedulerConfig,
+  type ClipSchedulerDeps,
+  type RenderCommand,
+} from './scheduler/clip-scheduler'
 import { clampWindowX, groundedWindowY } from '../shared/spatial'
 
 /** 默认节律配置（§9.3：22–07 夜间） */
@@ -78,6 +100,13 @@ let profileManager: ProfileManager | null = null
 let profileSwitcher: ProfileSwitcher | null = null
 let activeProfile: ProfileSummary | null = null
 let needsState: NeedsState = INITIAL_NEEDS
+let scheduler: ClipScheduler | null = null
+let schedulerTimer: ReturnType<typeof setInterval> | null = null
+let projectClips: readonly ClipMeta[] = []
+let projectTracks: ReadonlyMap<string, TrackFile> = new Map()
+let needRates: NeedRates = DEFAULT_NEED_RATES
+let loopStartMs = 0
+let lastTickMs = 0
 
 /**
  * 引导全部外壳组件。在 app ready 后调用。
@@ -200,6 +229,9 @@ async function bootstrap(): Promise<void> {
     mouseHandler.setAudioCoordinator(audioCoordinator)
   }
 
+  // 10. 初始化调度器：FSM → scheduler → renderer 完整运行时闭环 (§9)
+  await initScheduler()
+
   // 防止窗口被关闭时退出
   mainWindow.on('close', (e) => {
     e.preventDefault()
@@ -269,6 +301,251 @@ async function persistNeedsState(): Promise<void> {
   }
 }
 
+// ── 调度器运行时 (§9 连接 FSM → scheduler → renderer) ── //
+
+/** 循环片段默认播放时长 (ms)：idle/sleep/lie 等循环片段在调度器中持续的时间 */
+const LOOP_CLIP_DURATION_MS = 8_000
+
+/** 调度器 tick 间隔 (ms)：10fps 足以驱动调度决策 */
+const SCHEDULER_TICK_MS = 100
+
+/**
+ * 合并多来源的权重倍率到统一 weightOverrides 格式 (§9.3/§9.4/§9.6)。
+ *
+ * 后面的来源叠加到前面的结果上（乘法复合）。
+ */
+function mergeWeightOverrides(
+  ...sources: ReadonlyArray<Readonly<Record<string, Readonly<Record<string, number>>>>>
+): Record<string, Record<string, number>> {
+  const merged: Record<string, Record<string, number>> = {}
+  for (const source of sources) {
+    for (const [from, targets] of Object.entries(source)) {
+      for (const [to, mult] of Object.entries(targets)) {
+        if (!merged[from]) merged[from] = {}
+        merged[from][to] = (merged[from][to] ?? 1) * mult
+      }
+    }
+  }
+  return merged
+}
+
+/**
+ * 构造片段时长解析器 (§5.4 loopOutSec / track frameCount)。
+ */
+function makeClipDurationResolver(
+  clips: readonly ClipMeta[],
+  tracks: ReadonlyMap<string, TrackFile>,
+): (clipId: string) => number {
+  return (clipId: string): number => {
+    const clip = clips.find((c) => c.id === clipId)
+    if (!clip) return 3
+    if (clip.loop && clip.loopOutSec != null && clip.loopInSec != null) {
+      return clip.loopOutSec - clip.loopInSec
+    }
+    const track = tracks.get(clipId)
+    if (track) return track.frameCount / track.fps
+    return 3
+  }
+}
+
+/**
+ * 初始化调度器 (§9)：
+ * 加载项目素材 → 离线推进需求 → 构建 FSM + scheduler → 启动 tick 循环。
+ *
+ * 在 bootstrap() 末尾和 profile 切换时调用。
+ */
+async function initScheduler(): Promise<void> {
+  if (!activeProfile || !displayManager) return
+
+  try {
+    const data = await loadProject(activeProfile.dir)
+    await rebuildScheduler(data)
+  } catch (err) {
+    console.error('[scheduler] init failed, showing guidance:', err)
+    projectClips = []
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('scheduler:guidance')
+    }
+  }
+}
+
+/**
+ * 用加载的项目数据重建调度器 (§9)。
+ *
+ * 加载 track 文件 → 应用离线推进 → 合并权重倍率 → 创建 FSM + scheduler → 注入 mouseHandler。
+ * 调度器替换后，tick 循环在下一个 interval 自动使用新实例。
+ */
+async function rebuildScheduler(data: ProjectData): Promise<void> {
+  if (!displayManager) return
+
+  projectClips = data.clips
+
+  // 加载行走片段位移曲线 (§5.3)
+  const clipsDir = join(activeProfile!.dir, 'clips')
+  const tracksMap = new Map<string, TrackFile>()
+  for (const clip of projectClips) {
+    if (clip.track) {
+      try {
+        tracksMap.set(clip.id, await readTrackFile(clipsDir, trackFileName(clip.id)))
+      } catch {
+        /* 缺失 track 文件可忽略，行走片段会被占位兜底 */
+      }
+    }
+  }
+  projectTracks = tracksMap
+
+  // 离线推进 (§9.4)：用 needs-state.json 的 mtime 计算离线时长
+  const personality = data.persona.personality
+  needRates = personalityNeedRates(personality)
+  needsState = data.needsState
+  try {
+    const paths = getProjectPaths(activeProfile!.dir)
+    const stat = await fs.stat(paths.needsState)
+    const offlineSec = computeOfflineSec(stat.mtimeMs, Date.now())
+    needsState = advanceOffline(needsState, offlineSec, needRates)
+  } catch {
+    /* mtime 不可用时使用原始状态 */
+  }
+
+  // 合并权重倍率：behavior-config → 性格 → 节律 → 需求 (§9.3/§9.4/§9.6)
+  const hour = currentHour()
+  const rhythmConfig = data.behaviorConfig.rhythm
+  const isNight = isNightTime(hour, rhythmConfig)
+  const weightOverrides = mergeWeightOverrides(
+    data.behaviorConfig.weightOverrides,
+    personalityWeightModifiers(personality),
+    rhythmWeightModifiers(isNight, rhythmConfig),
+    needWeightModifiers(needsState),
+  )
+
+  // 夜间需求速率调制 (§9.3 疲劳夜间上升)
+  needRates = rhythmNeedRates(isNight, needRates)
+
+  const fsmConfig = { ...data.behaviorConfig, weightOverrides }
+  const fsm = new BehaviorFsm({ config: fsmConfig, rng: createSeededRandom(Date.now()) })
+
+  const bounds = displayManager.getBounds()
+  const deps: ClipSchedulerDeps = {
+    fsm,
+    clips: projectClips,
+    tracks: projectTracks,
+    getClipDurationSec: makeClipDurationResolver(projectClips, projectTracks),
+  }
+
+  const config: ClipSchedulerConfig = {
+    symmetrical: data.persona.symmetrical,
+    workArea: bounds,
+    windowWidth: WINDOW_WIDTH,
+    spriteBaseY: SPRITE_BASE_Y,
+    displayedWidthPx: 200,
+    idleConfig: {
+      idleIntervalMs: 8_000,
+      activeIntervalMs: 3_000,
+      exhaustionMultiplier: 1.5,
+      exhaustionThreshold: 3,
+    },
+    planOptions: {},
+    rng: createSeededRandom(Date.now() + 1),
+  }
+
+  scheduler = new ClipScheduler(deps, config)
+
+  // 注入 mouseHandler 以支持交互抢占 (§10)
+  if (mouseHandler) {
+    mouseHandler.setScheduler(scheduler)
+  }
+
+  // 启动 tick 循环
+  startSchedulerTick()
+
+  // §13 素材库为空：弹引导，不崩溃
+  const hasRealClips = projectClips.length > 0 && projectClips.some((c) => !isPlaceholderClip(c))
+  if (!hasRealClips) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('scheduler:guidance')
+    }
+  }
+}
+
+/**
+ * 启动调度器 tick 循环 (§9)。
+ *
+ * 每个 tick：推进需求 → 处理循环完成 → 推进调度器 → 分发渲染命令。
+ * 循环片段在 LOOP_CLIP_DURATION_MS 后通知调度器完成。
+ */
+function startSchedulerTick(): void {
+  if (schedulerTimer) return
+  lastTickMs = Date.now()
+  schedulerTimer = setInterval(() => {
+    if (!scheduler) return
+    const nowMs = Date.now()
+    const elapsedSec = (nowMs - lastTickMs) / 1000
+    lastTickMs = nowMs
+
+    // 推进需求 (§9.4)
+    needsState = advanceNeeds(needsState, elapsedSec, needRates)
+
+    // 循环片段超时后通知完成 (§9.5 变体轮换)
+    if (scheduler.isPlayingLoop && loopStartMs > 0 && nowMs >= loopStartMs + LOOP_CLIP_DURATION_MS) {
+      const completeResult = scheduler.completeCurrentPlayback(nowMs)
+      processSchedulerCommands(completeResult.commands)
+      loopStartMs = 0
+    }
+
+    // 推进调度器
+    const result = scheduler.tick(nowMs)
+    processSchedulerCommands(result.commands)
+
+    // 记录循环片段开始时间
+    for (const cmd of result.commands) {
+      if ((cmd.kind === 'play' || cmd.kind === 'fade_in') && cmd.clip?.loop) {
+        loopStartMs = nowMs
+      }
+    }
+  }, SCHEDULER_TICK_MS)
+}
+
+/**
+ * 将调度器渲染命令分发到窗口/渲染进程 (§9 scheduler → renderer)。
+ *
+ * - play/fade_in：发送片段 file URL 给渲染进程
+ * - update_position：直接移动窗口 (§7.2)
+ * - idle/hold/easing/fade_out：无需 IPC（调度器内部时序控制）
+ */
+function processSchedulerCommands(commands: readonly RenderCommand[]): void {
+  if (!mainWindow || mainWindow.isDestroyed() || !activeProfile) return
+
+  for (const cmd of commands) {
+    switch (cmd.kind) {
+      case 'play':
+      case 'fade_in': {
+        if (isPlaceholderClip(cmd.clip)) break
+        const clipFile = join(activeProfile.dir, 'clips', `${cmd.clip.id}.webm`)
+        const clipUrl = pathToFileURL(clipFile).href
+        mainWindow.webContents.send(
+          'scheduler:play',
+          clipUrl,
+          cmd.mirrored,
+          cmd.clip.loop,
+        )
+        break
+      }
+      case 'update_position':
+        mainWindow.setPosition(Math.round(cmd.x), Math.round(cmd.y), false)
+        break
+      // idle / hold / easing / fade_out — 调度器内部时序控制，无需 IPC
+    }
+  }
+}
+
+/** 停止调度器 tick 循环 */
+function stopSchedulerTick(): void {
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer)
+    schedulerTimer = null
+  }
+}
+
 /**
  * 活跃宠物变化处理 (§12.2)：
  * 保存旧宠物需求状态 → 加载新宠物项目数据 → 重建设置存储 → 通知渲染进程。
@@ -285,16 +562,20 @@ async function handleActiveProfileChanged(profile: ProfileSummary | null): Promi
     return
   }
 
-  // 2. 加载选中宠物的项目数据（persona / needs / clips / audio）
+  // 2. 加载选中宠物的项目数据（persona / needs / clips / audio）并重建调度器
   try {
     const data = await loadProject(profile.dir)
-    needsState = data.needsState
     console.log(
       `[profile] active="${profile.name}" clips=${data.clips.length} audio=${data.audio.length}`,
     )
+    await rebuildScheduler(data)
   } catch (err) {
     console.warn(`[profile] invalid project "${profile.id}", using defaults:`, err)
     needsState = await loadNeedsStateOrDefault(profile.dir)
+    scheduler = null
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('scheduler:guidance')
+    }
   }
 
   // 3. 设置存储指向新宠物项目目录（persona/behavior-config 为项目内文件 §12.1）
@@ -466,6 +747,7 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  stopSchedulerTick()
   hotkeyManager?.dispose()
   screenManager?.dispose()
   displayManager?.dispose()

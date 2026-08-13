@@ -171,6 +171,24 @@ export class SpritePlayer {
     this.basePoint = basePoint
   }
 
+  /**
+   * 动态切换播放片段（由调度器驱动，§9）。
+   *
+   * @param src WebM-alpha 片段 URL（file:// 路径）
+   * @param mirrored 是否水平镜像（仅对称宠物，§4.3）
+   * @param loop 是否循环播放
+   */
+  playClip(src: string, mirrored: boolean, loop: boolean): void {
+    this.video.loop = loop
+    if (this.video.src !== src) {
+      this.video.src = src
+      this.video.play().catch((): void => {
+        /* autoplay 或 CORS 可能失败，静默处理 */
+      })
+    }
+    this.flip = mirrored
+  }
+
   /** 销毁播放器，清理 DOM 和动画 */
   destroy(): void {
     this.stopBreathing()

@@ -65,6 +65,16 @@ export interface ImportBridge {
   ): Promise<{ clipId: string; clipsCount: number }>
 }
 
+/** 调度器 IPC 桥接接口 (§9 scheduler → renderer) */
+export interface SchedulerBridge {
+  /** 监听主进程播放片段指令（§9 调度器发出 play 命令） */
+  onPlayClip(callback: (fileUrl: string, mirrored: boolean, loop: boolean) => void): void
+  /** 监听素材库为空指引（§13 不崩溃，弹引导采集） */
+  onShowGuidance(callback: () => void): void
+  /** 监听崩溃恢复通知（§13 重置回锚定态） */
+  onReset(callback: () => void): void
+}
+
 /** 设置面板 IPC 桥接接口 (§12.4) */
 export interface SettingsBridge {
   /** 获取显示器列表 */
@@ -142,4 +152,17 @@ contextBridge.exposeInMainWorld('petalive', {
     rebindHotkey: (accelerator: string) =>
       ipcRenderer.invoke('settings:rebind-hotkey', accelerator),
   } satisfies SettingsBridge,
+  scheduler: {
+    onPlayClip: (callback: (fileUrl: string, mirrored: boolean, loop: boolean) => void) => {
+      const handler = (_e: unknown, fileUrl: string, mirrored: boolean, loop: boolean): void =>
+        callback(fileUrl, mirrored, loop)
+      ipcRenderer.on('scheduler:play', handler)
+    },
+    onShowGuidance: (callback: () => void) => {
+      ipcRenderer.on('scheduler:guidance', () => callback())
+    },
+    onReset: (callback: () => void) => {
+      ipcRenderer.on('scheduler:reset', () => callback())
+    },
+  } satisfies SchedulerBridge,
 })

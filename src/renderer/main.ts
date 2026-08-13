@@ -92,6 +92,36 @@ function bootstrap(): void {
   const player = new SpritePlayer(app, config)
   player.startBreathing()
 
+  // 调度器桥接：监听主进程播放指令，动态切换片段 (§9)
+  const schedulerBridge = window.petalive?.scheduler
+  if (schedulerBridge) {
+    schedulerBridge.onPlayClip((fileUrl, mirrored, loop) => {
+      player.playClip(fileUrl, mirrored, loop)
+    })
+    schedulerBridge.onShowGuidance(() => {
+      // §13 素材库为空：显示引导，不崩溃
+      const guidance = document.createElement('div')
+      guidance.id = 'empty-guidance'
+      Object.assign(guidance.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        color: 'rgba(255,255,255,0.8)',
+        fontSize: '14px',
+        textAlign: 'center',
+        fontFamily: 'sans-serif',
+        pointerEvents: 'none',
+      })
+      guidance.textContent = '还没有素材片段\n请通过导入向导添加宠物视频'
+      app.appendChild(guidance)
+    })
+    schedulerBridge.onReset(() => {
+      // §13 崩溃恢复：重置到默认状态
+      player.playClip(TEST_CLIP_SRC, false, true)
+    })
+  }
+
   // 音频播放器 (§11)：接收主进程 IPC 指令播放声效
   const audioPlayer = new AudioPlayer({
     audioBaseUrl: 'audio',

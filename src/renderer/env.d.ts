@@ -8,6 +8,7 @@ declare global {
       input: import('../preload').InputBridge
       audio: import('../preload').AudioBridge
       settings: import('../preload').SettingsBridge
+      scheduler: import('../preload').SchedulerBridge
     }
     /** 精灵播放器实例（开发调试用） */
     __spritePlayer: import('./sprite/video-player').SpritePlayer | undefined
