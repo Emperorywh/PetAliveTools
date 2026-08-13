@@ -81,7 +81,7 @@ describe('SHOOTING_LIST', () => {
     expect(states).toContain('dragged')
   })
 
-  it('D category has beg_food, drink, want_play, bored, happy', () => {
+  it('D category has beg_food, drink, want_play, bored, happy, annoyed', () => {
     const dItems = SHOOTING_LIST.filter((i) => i.category === 'D')
     const states = dItems.map((i) => i.state)
     expect(states).toContain('beg_food')
@@ -89,6 +89,7 @@ describe('SHOOTING_LIST', () => {
     expect(states).toContain('want_play')
     expect(states).toContain('bored')
     expect(states).toContain('happy')
+    expect(states).toContain('annoyed')
   })
 
   it('SHOOTING_CATEGORIES has 4 categories with labels', () => {

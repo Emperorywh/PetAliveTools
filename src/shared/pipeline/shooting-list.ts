@@ -310,6 +310,20 @@ export const SHOOTING_LIST: readonly ShootingListItem[] = [
     isWalk: false,
     description: '开心',
   },
+  {
+    state: 'annoyed',
+    label: '烦躁',
+    category: 'D',
+    required: false,
+    startupSet: false,
+    direction: 'none',
+    loop: false,
+    anchor: 'sit',
+    suggestedVariants: 1,
+    suggestedVariantsMax: 2,
+    isWalk: false,
+    description: '烦躁',
+  },
 ] as const
 
 // ── C 类别无固定条目（§4.4 由用户自定义捕捉）── //

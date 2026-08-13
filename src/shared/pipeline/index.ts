@@ -94,6 +94,10 @@ export {
   frameToSec
 } from './displacement-curve'
 export {
+  type WalkTrackResult,
+  buildWalkTrack
+} from './walk-pipeline'
+export {
   type TranscodePresetName,
   type ResolutionTier,
   type TranscodePreset,

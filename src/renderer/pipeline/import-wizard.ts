@@ -16,8 +16,9 @@
 
 import type { ClipMeta } from '../../shared/types/clip-meta'
 import type { ProjectData } from '../../shared/types/project'
-import type { RgbColor } from '../../shared/pipeline/frame'
+import type { RgbColor, RawFrame } from '../../shared/pipeline/frame'
 import type { ShootingListItem } from '../../shared/pipeline/shooting-list'
+import { applyChromaKey, buildWalkTrack, type KeyedFrame } from '../../shared/pipeline'
 import {
   type ImportFlowState,
   createImportFlow,
@@ -74,6 +75,7 @@ export class ImportWizard {
   private flowState: ImportFlowState | null = null
   private chromaPreview: ChromaKeyPreview | null = null
   private walkCorrection: WalkCorrectionView | null = null
+  private referenceFrame: RawFrame | null = null
   private statusMsg: string = ''
 
   constructor(container: HTMLElement) {
@@ -267,6 +269,7 @@ export class ImportWizard {
     if (!this.projectData) return
     const variant = nextVariantNumber(item.state, this.projectData.clips)
     this.flowState = createImportFlow(item, variant)
+    this.referenceFrame = null
     this.statusMsg = ''
     this.render()
   }
@@ -277,6 +280,7 @@ export class ImportWizard {
     this.chromaPreview = null
     this.walkCorrection?.dispose()
     this.walkCorrection = null
+    this.referenceFrame = null
     this.flowState = null
     this.statusMsg = ''
     this.render()
@@ -453,7 +457,7 @@ export class ImportWizard {
     })
   }
 
-  // ── 步骤 2：背景参考色 ── //
+  // ── 步骤 2：背景参考色 / 参考帧 (§5.5 圈选背景参考色/帧) ── //
 
   private renderBackgroundRefStep(content: HTMLElement): void {
     const data = this.flowState!.data
@@ -461,7 +465,7 @@ export class ImportWizard {
 
     const hint = el('p', '')
     hint.style.cssText = `font-size:12px;color:${COLOR_TEXT_DIM};margin:0 0 12px 0;line-height:1.5`
-    hint.textContent = '点击预览画面中纯色背景区域取参考色，或手动输入 RGB 值。背景参考色用于色键抠像（§5.1）。'
+    hint.textContent = '点击预览画面取参考色，或手动输入 RGB；也可滑动时间轴至空背景帧并设为参考帧，用于帧差辅助抠像（§5.1）。'
     card.appendChild(hint)
 
     // 视频帧取色画布
@@ -469,26 +473,84 @@ export class ImportWizard {
       const canvas = document.createElement('canvas')
       canvas.width = 480
       canvas.height = 270
-      canvas.style.cssText = 'border-radius:4px;cursor:crosshair;background:#000'
+      canvas.style.cssText = 'border-radius:4px;cursor:crosshair;background:#000;display:block'
       card.appendChild(canvas)
 
-      this.drawVideoFrame(canvas, data.videoPath, (frameData) => {
-        canvas.addEventListener('click', (e) => {
-          const rect = canvas.getBoundingClientRect()
-          const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width))
-          const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height))
-          const ctx = canvas.getContext('2d')
-          if (!ctx) return
-          const pixel = ctx.getImageData(x, y, 1, 1).data
-          const color: RgbColor = { r: pixel[0], g: pixel[1], b: pixel[2] }
-          this.flowState = updateData(this.flowState!, { referenceColor: color })
+      // 帧位置滑块
+      const seekRow = div('wizard-bg-seek')
+      seekRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px'
+      const seekLabel = el('label', '')
+      seekLabel.style.cssText = `font-size:12px;color:${COLOR_TEXT_DIM}`
+      seekLabel.textContent = '帧位置'
+      seekRow.appendChild(seekLabel)
+      const seekInput = document.createElement('input')
+      seekInput.type = 'range'
+      seekInput.min = '0'
+      seekInput.max = String(data.videoDurationSec || 0)
+      seekInput.step = '0.1'
+      seekInput.value = '0.1'
+      seekInput.style.flex = '1'
+      const seekVal = el('span', '')
+      seekVal.style.cssText = `font-size:12px;color:${COLOR_TEXT};min-width:40px;text-align:right`
+      seekVal.textContent = '0.1s'
+      seekRow.appendChild(seekInput)
+      seekRow.appendChild(seekVal)
+      card.appendChild(seekRow)
+
+      let currentSeekTime = 0.1
+
+      // 初始绘制首帧
+      this.drawVideoFrameAt(canvas, data.videoPath, currentSeekTime)
+
+      // 点击取色（从画布像素读取）
+      canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect()
+        const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width))
+        const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const pixel = ctx.getImageData(x, y, 1, 1).data
+        const color: RgbColor = { r: pixel[0], g: pixel[1], b: pixel[2] }
+        this.flowState = updateData(this.flowState!, { referenceColor: color })
+        this.statusMsg = ''
+        this.render()
+      })
+
+      // 拖动滑块 → 重绘对应帧
+      seekInput.addEventListener('input', () => {
+        currentSeekTime = parseFloat(seekInput.value)
+        seekVal.textContent = `${currentSeekTime.toFixed(1)}s`
+        this.drawVideoFrameAt(canvas, data.videoPath!, currentSeekTime)
+      })
+
+      // 参考帧操作按钮行
+      const refBtnRow = div('wizard-bg-ref-btns')
+      refBtnRow.style.cssText = 'margin-top:8px;display:flex;gap:8px'
+
+      const refBtn = makeButton('将当前帧设为参考帧', async () => {
+        const frame = await this.extractVideoFrameAt(data.videoPath!, currentSeekTime)
+        if (frame) {
+          this.referenceFrame = {
+            width: frame.width,
+            height: frame.height,
+            data: frame.data,
+          }
           this.statusMsg = ''
           this.render()
-        })
-        // 存储帧数据供后续 keying-preview 使用
-        this.flowState = updateData(this.flowState!, {} as never)
-        void frameData
+        }
       })
+      styleButton(refBtn, COLOR_BTN, COLOR_BTN_HOVER)
+      refBtnRow.appendChild(refBtn)
+
+      if (this.referenceFrame) {
+        const clearBtn = makeButton('清除参考帧', () => {
+          this.referenceFrame = null
+          this.render()
+        })
+        clearBtn.style.cssText = `padding:8px 16px;border-radius:6px;border:1px solid ${COLOR_MISSING};background:transparent;color:${COLOR_MISSING};font-size:13px;cursor:pointer`
+        refBtnRow.appendChild(clearBtn)
+      }
+      card.appendChild(refBtnRow)
     }
 
     // 当前参考色显示
@@ -506,7 +568,42 @@ export class ImportWizard {
       card.appendChild(colorBox)
     }
 
-    // 手动输入
+    // 参考帧缩略图
+    if (this.referenceFrame) {
+      const refBox = div('wizard-ref-frame-preview')
+      refBox.style.cssText = 'margin-top:12px;display:flex;align-items:center;gap:8px'
+      const thumb = document.createElement('canvas')
+      thumb.width = 80
+      thumb.height = 45
+      thumb.style.cssText = 'border-radius:4px;border:1px solid #5eba7d'
+      const tctx = thumb.getContext('2d')
+      if (tctx) {
+        const off = document.createElement('canvas')
+        off.width = this.referenceFrame.width
+        off.height = this.referenceFrame.height
+        const offCtx = off.getContext('2d')
+        if (offCtx) {
+          offCtx.putImageData(
+            new ImageData(
+              new Uint8ClampedArray(this.referenceFrame.data),
+              this.referenceFrame.width,
+              this.referenceFrame.height,
+            ),
+            0,
+            0,
+          )
+          tctx.drawImage(off, 0, 0, 80, 45)
+        }
+      }
+      refBox.appendChild(thumb)
+      const refLabel = el('span', '')
+      refLabel.style.cssText = 'font-size:12px;color:#5eba7d'
+      refLabel.textContent = `参考帧已设定 (${this.referenceFrame.width}×${this.referenceFrame.height})`
+      refBox.appendChild(refLabel)
+      card.appendChild(refBox)
+    }
+
+    // 手动输入 RGB
     const manualBtn = makeButton('手动输入 RGB', () => {
       const input = window.prompt('输入 RGB 值（逗号分隔，如 128,128,128）：', '128,128,128')
       if (!input) return
@@ -528,16 +625,16 @@ export class ImportWizard {
     content.appendChild(card)
   }
 
-  /** 在 canvas 上绘制视频首帧 */
-  private drawVideoFrame(
+  /** 在 canvas 上绘制指定时间点的视频帧 */
+  private drawVideoFrameAt(
     canvas: HTMLCanvasElement,
     videoPath: string,
-    onReady: (frameData: ImageData) => void,
+    timeSec: number,
   ): void {
     const video = document.createElement('video')
     video.preload = 'auto'
     video.onloadeddata = () => {
-      video.currentTime = 0.1
+      video.currentTime = timeSec
     }
     video.onseeked = () => {
       const ctx = canvas.getContext('2d')
@@ -550,7 +647,6 @@ export class ImportWizard {
       ctx.fillStyle = '#000'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.drawImage(video, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh)
-      onReady(ctx.getImageData(0, 0, canvas.width, canvas.height))
     }
     video.src = `file:///${videoPath.replace(/\\/g, '/')}`
   }
@@ -608,7 +704,7 @@ export class ImportWizard {
     if (!data.videoPath || !data.referenceColor) return
 
     // 从视频提取一帧作为预览源帧
-    const frame = await this.extractVideoFrame(data.videoPath)
+    const frame = await this.extractVideoFrameAt(data.videoPath, Math.min(0.5, (data.videoDurationSec || 1) * 0.1))
     if (!frame) return
 
     const initialState: ChromaKeyPreviewState = {
@@ -617,8 +713,12 @@ export class ImportWizard {
         height: frame.height,
         data: new Uint8ClampedArray(frame.data),
       },
-      referenceFrame: null,
-      referenceAssist: null,
+      referenceFrame: this.referenceFrame
+        ? { width: this.referenceFrame.width, height: this.referenceFrame.height, data: new Uint8ClampedArray(this.referenceFrame.data) }
+        : null,
+      referenceAssist: this.referenceFrame
+        ? { tolerance: 0.1, influence: 0.8 }
+        : null,
       key: {
         referenceColor: data.referenceColor,
         tolerance: data.keyingTolerance,
@@ -650,13 +750,13 @@ export class ImportWizard {
     })
   }
 
-  /** 从视频提取首帧为 RGBA 数据 */
-  private extractVideoFrame(videoPath: string): Promise<{ width: number; height: number; data: Uint8ClampedArray } | null> {
+  /** 从视频提取指定时间点的帧为 RGBA 数据（原始分辨率） */
+  private extractVideoFrameAt(videoPath: string, timeSec: number): Promise<{ width: number; height: number; data: Uint8ClampedArray } | null> {
     return new Promise((resolve) => {
       const video = document.createElement('video')
       video.preload = 'auto'
       video.onloadeddata = () => {
-        video.currentTime = Math.min(0.5, (video.duration || 1) * 0.1)
+        video.currentTime = Math.min(timeSec, (video.duration || 1) - 0.01)
       }
       video.onseeked = () => {
         const canvas = document.createElement('canvas')
@@ -675,6 +775,79 @@ export class ImportWizard {
           data: new Uint8ClampedArray(imageData.data),
         })
       }
+      video.onerror = () => resolve(null)
+      video.src = `file:///${videoPath.replace(/\\/g, '/')}`
+    })
+  }
+
+  /**
+   * 从视频逐帧提取 RGBA 数据（降采样到 maxWidth 以内），供行走跟踪使用。
+   *
+   * 在视频时间轴上均匀采样 maxFrames 帧（受视频时长 × fps 约束），
+   * 逐次 seek + drawImage 到缩放画布。
+   */
+  private extractVideoFrames(
+    videoPath: string,
+    durationSec: number,
+    maxFrames: number,
+    maxWidth: number,
+  ): Promise<{ frames: RawFrame[]; fps: number } | null> {
+    return new Promise((resolve) => {
+      const video = document.createElement('video')
+      video.preload = 'auto'
+
+      video.onloadedmetadata = () => {
+        const duration = durationSec || video.duration
+        if (!duration || !isFinite(duration)) {
+          resolve(null)
+          return
+        }
+
+        const fps = 30
+        const totalFrames = Math.min(maxFrames, Math.max(2, Math.round(duration * fps)))
+
+        const scale = Math.min(1, maxWidth / video.videoWidth)
+        const width = Math.max(1, Math.round(video.videoWidth * scale))
+        const height = Math.max(1, Math.round(video.videoHeight * scale))
+
+        const frames: RawFrame[] = []
+        let frameIdx = 0
+
+        const seekNext = (): void => {
+          if (frameIdx >= totalFrames) {
+            resolve({ frames, fps })
+            return
+          }
+          // 均匀分布：首帧到末帧覆盖整个视频
+          const t = totalFrames === 1
+            ? 0.01
+            : (frameIdx / (totalFrames - 1)) * (duration - 0.02) + 0.01
+          video.currentTime = Math.max(0, Math.min(t, duration - 0.01))
+        }
+
+        video.onseeked = () => {
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            resolve(null)
+            return
+          }
+          ctx.drawImage(video, 0, 0, width, height)
+          const imageData = ctx.getImageData(0, 0, width, height)
+          frames.push({
+            width,
+            height,
+            data: new Uint8ClampedArray(imageData.data),
+          })
+          frameIdx++
+          seekNext()
+        }
+
+        seekNext()
+      }
+
       video.onerror = () => resolve(null)
       video.src = `file:///${videoPath.replace(/\\/g, '/')}`
     })
@@ -742,67 +915,110 @@ export class ImportWizard {
     content.appendChild(card)
   }
 
-  // ── 步骤 5：行走跟踪校正（仅行走类） ── //
+  // ── 步骤 5：行走跟踪校正（仅行走类）── //
 
   private renderWalkTrackingStep(content: HTMLElement): void {
     const card = makeCard()
 
     const hint = el('p', '')
     hint.style.cssText = `font-size:12px;color:${COLOR_TEXT_DIM};margin:0 0 12px 0;line-height:1.5`
-    hint.textContent = '行走跟踪自动生成逐帧位移曲线；拖拽关键点校正停顿/变速处，拖动红线标注行走子段边界。'
+    hint.textContent = '从视频中逐帧提取 alpha 质心并生成位移曲线（§5.3）；拖拽关键点校正停顿/变速处，拖动红线标注行走子段边界。'
     card.appendChild(hint)
 
-    // 行走校正视图容器
+    // 行走校正视图容器（加载完成前显示占位提示）
     const host = div('wizard-walk-host')
     card.appendChild(host)
 
     content.appendChild(card)
 
-    // 使用位移曲线演示数据初始化校正视图
-    // （真实流程中从视频逐帧提取 alpha 并跟踪；此处用已有内核生成预览）
+    // 异步：提取视频帧 → 色键 → 行走跟踪管线 → 初始化校正视图
     this.initWalkCorrection(host)
   }
 
-  private initWalkCorrection(host: HTMLElement): void {
-    // 生成演示用的位移曲线数据（真实流程中由行走跟踪内核生成）
-    const fps = 30
-    const frameCount = 150
-    const offsets: number[] = []
-    for (let i = 0; i < frameCount; i++) {
-      // 模拟匀速行走：线性位移
-      offsets.push((i / frameCount) * 200)
+  /**
+   * 从用户实际视频生成位移曲线并初始化校正视图 (§5.3)。
+   *
+   * 管线：提取帧 → applyChromaKey（用已选参考色/容差）→
+   * buildWalkTrack（trackWalkFrames → generateDisplacementCurve →
+   * detectMoveSegment）→ WalkCorrectionView。
+   */
+  private async initWalkCorrection(host: HTMLElement): Promise<void> {
+    const data = this.flowState!.data
+    if (!data.videoPath || !data.referenceColor) {
+      host.appendChild(this.makeWalkError('缺少视频或参考色数据，请返回上一步'))
+      return
     }
 
+    // 加载占位
+    const loading = el('div', 'wizard-walk-loading')
+    loading.style.cssText = `padding:20px;color:${COLOR_TEXT_DIM};font-size:13px`
+    loading.textContent = '正在提取视频帧并跟踪行走…'
+    host.appendChild(loading)
+
+    // 1. 提取视频帧（降采样以控制内存）
+    const result = await this.extractVideoFrames(
+      data.videoPath,
+      data.videoDurationSec,
+      150,
+      320,
+    )
+    if (!result || result.frames.length < 2) {
+      host.removeChild(loading)
+      host.appendChild(this.makeWalkError('无法提取足够视频帧用于行走跟踪，请检查视频文件'))
+      return
+    }
+
+    // 用户可能已离开此步骤
+    if (this.flowState?.step !== 'walk-tracking') return
+
+    // 2. 对每帧施加色键（用流程中已选的参考色/容差/软边/亮度权重）
+    const keyedFrames: KeyedFrame[] = result.frames.map((frame) =>
+      applyChromaKey(frame, {
+        referenceColor: data.referenceColor!,
+        tolerance: data.keyingTolerance,
+        softness: data.keyingSoftness,
+        lumaWeight: data.keyingLumaWeight,
+        edge: { shrinkRadius: 1, featherRadius: 1 },
+      }),
+    )
+
+    // 3. 行走跟踪全流程（质心跟踪 → 位移曲线 → 子段检测）
+    const { trackFile, moveSegment } = buildWalkTrack(keyedFrames, result.fps)
+
+    // 4. 初始化校正视图
     const initialState: WalkCorrectionState = {
-      fps,
-      frameCount,
-      offsets,
+      fps: trackFile.fps,
+      frameCount: trackFile.frameCount,
+      offsets: trackFile.offsets,
       keypoints: [],
-      moveStartFrame: Math.round(frameCount * 0.15),
-      moveEndFrame: Math.round(frameCount * 0.85),
+      moveStartFrame: moveSegment?.moveStartFrame ?? 0,
+      moveEndFrame: moveSegment?.moveEndFrame ?? trackFile.frameCount - 1,
     }
 
     this.walkCorrection?.dispose()
     this.walkCorrection = new WalkCorrectionView(host, initialState, {
       onChange: (state) => {
-        // 行走子段标注变更时同步到流程数据
-        const secs = {
+        this.flowState = updateData(this.flowState!, {
           moveStartSec: state.moveStartFrame / state.fps,
           moveEndSec: state.moveEndFrame / state.fps,
-        }
-        this.flowState = updateData(this.flowState!, {
-          moveStartSec: secs.moveStartSec,
-          moveEndSec: secs.moveEndSec,
         })
       },
     })
 
-    // 初始化默认值
+    // 5. 把跟踪结果写入流程数据
     this.flowState = updateData(this.flowState!, {
-      moveStartSec: initialState.moveStartFrame / fps,
-      moveEndSec: initialState.moveEndFrame / fps,
+      moveStartSec: initialState.moveStartFrame / initialState.fps,
+      moveEndSec: initialState.moveEndFrame / initialState.fps,
       trackFile: this.walkCorrection.exportTrackFile(),
     })
+  }
+
+  /** 行走跟踪错误提示元素 */
+  private makeWalkError(msg: string): HTMLElement {
+    const err = el('div', 'wizard-walk-error')
+    err.style.cssText = `padding:16px;color:${COLOR_MISSING};font-size:13px`
+    err.textContent = msg
+    return err
   }
 
   // ── 步骤 6：填写标签 ── //
