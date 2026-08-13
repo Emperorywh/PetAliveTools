@@ -93,11 +93,36 @@ export function createChromaPreviewWindow(): BrowserWindow {
     }
   })
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#chroma-preview`)
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'chroma-preview' })
-  }
-
+  loadToolView(win, 'chroma-preview')
   return win
+}
+
+/**
+ * 创建行走跟踪裁切 + 位移曲线校正工具窗口（§5.3 手动验证入口）。
+ *
+ * 承载 #walk-correction 渲染视图（跟踪裁切片段回放 + 位移曲线
+ * 手动校正 + 行走子段标注）。由主进程在 PETALIVE_VIEW=walk-correction 时创建。
+ */
+export function createWalkCorrectionWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 980,
+    height: 900,
+    title: '行走跟踪与位移曲线校正（PetAliveTools）',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true
+    }
+  })
+
+  loadToolView(win, 'walk-correction')
+  return win
+}
+
+/** 按视图名加载工具窗口 URL（dev server 或生产构建文件） */
+function loadToolView(win: BrowserWindow, view: string): void {
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${view}`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: view })
+  }
 }

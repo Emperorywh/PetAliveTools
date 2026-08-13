@@ -6,9 +6,10 @@
  *
  * 运行于主进程（需要 ffmpeg 二进制与文件系统访问）。
  *
- * 色键抠像内核位于 src/shared/pipeline（纯像素运算，无平台依赖），
- * 由本模块重新导出供主进程批量转码管线（TASK-007）与行走跟踪（TASK-006）使用；
- * 渲染进程抠像预览（§5.5）直接引用同一内核，保证预览与转码结果一致。
+ * 色键抠像与行走跟踪内核位于 src/shared/pipeline（纯像素运算，无平台依赖），
+ * 由本模块重新导出供主进程批量转码管线（TASK-007）使用；渲染进程导入预览
+ * （§5.5）直接引用同一内核，保证预览与转码结果一致。位移曲线文件的
+ * 读写 (track.json) 由本模块的 track-file 提供 (§12.1)。
  */
 
 export {
@@ -43,3 +44,25 @@ export {
   createFurBlobScene,
   createSolidFrame
 } from '../../shared/pipeline'
+export {
+  type TrackableAlpha,
+  type WalkFrameTrack,
+  type WalkTrackerOptions,
+  DEFAULT_ALPHA_THRESHOLD,
+  DEFAULT_SMOOTHING_RADIUS,
+  DEFAULT_FOOT_ROW_COVERAGE,
+  trackWalkFrame,
+  trackWalkFrames,
+  type TrackCropOptions,
+  type TrackCropRect,
+  computeTrackCropRects,
+  cropFrame,
+  type MoveSegment,
+  type MoveSegmentDetectOptions,
+  DEFAULT_SPEED_THRESHOLD,
+  generateDisplacementCurve,
+  applyKeypointCorrections,
+  detectMoveSegment,
+  frameToSec
+} from '../../shared/pipeline'
+export { trackFileName, writeTrackFile, readTrackFile } from './track-file'
