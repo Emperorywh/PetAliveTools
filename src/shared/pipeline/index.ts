@@ -93,3 +93,17 @@ export {
   detectMoveSegment,
   frameToSec
 } from './displacement-curve'
+export {
+  type TranscodePresetName,
+  type ResolutionTier,
+  type TranscodePreset,
+  type ResolutionPreset,
+  TRANSCODE_PRESETS,
+  RESOLUTION_PRESETS,
+  TARGET_FPS,
+  PIXEL_FORMAT,
+  VIDEO_CODEC,
+  recommendPreset,
+  computeTargetEdge,
+  computeScaleDimensions
+} from './presets'

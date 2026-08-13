@@ -4,6 +4,7 @@ directories:
   buildResources: build
 files:
   - out/**/*
+  - ffmpeg/**/*
 win:
   target:
     - nsis

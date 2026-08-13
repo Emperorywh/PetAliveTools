@@ -66,3 +66,38 @@ export {
   frameToSec
 } from '../../shared/pipeline'
 export { trackFileName, writeTrackFile, readTrackFile } from './track-file'
+
+// ── 转码 (§5.2, §3.3) ── //
+export {
+  type TranscodePresetName,
+  type ResolutionTier,
+  type TranscodePreset,
+  type ResolutionPreset,
+  TRANSCODE_PRESETS,
+  RESOLUTION_PRESETS,
+  TARGET_FPS,
+  PIXEL_FORMAT,
+  VIDEO_CODEC,
+  recommendPreset,
+  computeTargetEdge,
+  computeScaleDimensions
+} from '../../shared/pipeline/presets'
+export {
+  type AppInfo,
+  type TranscodeOptions,
+  type ScaleFilterResult,
+  type FfmpegArgs,
+  type FfmpegCommand,
+  resolveFfmpegPath,
+  validateFfmpegBinary,
+  buildScaleFilter,
+  buildFfmpegArgs,
+  buildTranscodeCommand
+} from './ffmpeg'
+export {
+  type TranscodeRequest,
+  type TranscodeResult,
+  clipFileName,
+  buildTranscodeOptions,
+  transcodeClip
+} from './transcoder'
