@@ -1,0 +1,11 @@
+appId: com.petalive.desktop
+productName: PetAliveTools
+directories:
+  buildResources: build
+files:
+  - out/**/*
+win:
+  target:
+    - nsis
+  arch:
+    - x64
