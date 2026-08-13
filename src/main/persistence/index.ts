@@ -6,3 +6,22 @@
  *
  * 运行于主进程。
  */
+
+export {
+  getProjectPaths,
+  createProject,
+  loadProject,
+  saveProject,
+  validateProject,
+  createDefaultPersona,
+} from './project-io'
+export type { ProjectPaths } from './project-io'
+
+export {
+  PLACEHOLDER_CLIP_ID,
+  createPlaceholderClip,
+  resolveClipForState,
+  getMissingStates,
+  buildClipLookup,
+  isPlaceholderClip,
+} from './placeholder'

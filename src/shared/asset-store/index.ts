@@ -6,3 +6,32 @@
  *
  * 跨进程共享模块。
  */
+
+// 类型定义
+export type {
+  Persona,
+  Personality,
+  NeedsState,
+  BehaviorConfig,
+  RhythmConfig,
+  MicroRandomConfig,
+  ClipMeta,
+  ClipCategory,
+  ClipDirection,
+  ClipAnchor,
+  Hitbox,
+  AudioMeta,
+  AudioCategory,
+  ProjectData,
+} from '../types/project'
+
+// Schema 验证
+export {
+  validatePersona,
+  validateNeedsState,
+  validateBehaviorConfig,
+  validateClipMeta,
+  validateClipMetaArray,
+  validateAudioMeta,
+  validateAudioMetaArray,
+} from '../schemas'
