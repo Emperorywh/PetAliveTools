@@ -19,10 +19,12 @@ import { createTray } from './tray'
 import { registerHideShortcut, unregisterHideShortcut } from './global-shortcut'
 import { ScreenManager } from './screen'
 import { registerImportIpcHandlers } from './pipeline/ipc-handlers'
+import { MouseHandler } from './input/mouse-handler'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let screenManager: ScreenManager | null = null
+let mouseHandler: MouseHandler | null = null
 
 /**
  * 引导全部外壳组件。在 app ready 后调用。
@@ -83,6 +85,21 @@ function bootstrap(): void {
   //    toggle 机制已就绪（setInteractive API），命中盒逻辑由 TASK-012 实现
   setInteractive(mainWindow, false)
 
+  // 6. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
+  mouseHandler = new MouseHandler(
+    mainWindow,
+    {
+      onHide: () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return
+        if (mainWindow.isVisible()) mainWindow.hide()
+        else mainWindow.show()
+      },
+      onSettings: () => console.log('[input] settings'),
+      onAbout: () => console.log('[input] about'),
+    },
+    { windowWidth: 400, spriteBaseY: 380 },
+  )
+
   // 防止窗口被关闭时退出（frameless 无关闭按钮，但 Alt+F4 可能触发）
   mainWindow.on('close', (e) => {
     e.preventDefault()
@@ -115,6 +132,7 @@ app.on('before-quit', () => {
     mainWindow.destroy()
   }
   tray?.destroy()
+  mouseHandler?.dispose()
 })
 
 app.on('window-all-closed', () => {

@@ -18,9 +18,24 @@ import { SpritePlayer, type SpritePlayerConfig } from './sprite/video-player'
 import { DEFAULT_SHADOW_CONFIG } from './composition/contact-shadow'
 import type { BasePoint } from './composition/anchor-alignment'
 import { mountChromaKeyPreviewDemo, mountWalkCorrectionDemo, mountImportWizard } from './pipeline'
+import { InteractionHandler } from './input/interaction'
+import { hitboxToPixels, DEFAULT_BUFFER_PX } from '../shared/input'
+import type { Hitbox } from '../shared/types/clip-meta'
 
 /** 测试片段 URL（用户将 WebM-alpha 文件放至 src/renderer/public/test-clip.webm） */
 const TEST_CLIP_SRC = 'test-clip.webm'
+
+/** 窗口固定尺寸 (§6.1) */
+const WINDOW_WIDTH = 400
+const WINDOW_HEIGHT = 400
+
+/**
+ * 默认命中盒 (§5.4 示例值：[x, y, w, h] 归一化)。
+ *
+ * 运行时由调度器根据当前片段的 hitbox 字段更新；
+ * 在完整调度器接线前使用此默认值。
+ */
+const DEFAULT_HITBOX: Hitbox = [0.1, 0.05, 0.8, 0.9]
 
 /**
  * 精灵基准坐标：窗口底部中央偏上。
@@ -68,8 +83,26 @@ function bootstrap(): void {
   const player = new SpritePlayer(app, config)
   player.startBreathing()
 
+  // 交互处理器：命中盒检测、穿透/交互切换、抚摸/点击/拖拽/右键菜单 (§10)
+  const hitboxPx = hitboxToPixels(DEFAULT_HITBOX, {
+    x: 0,
+    y: 0,
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+  })
+  const interaction = new InteractionHandler({
+    getHitboxPx: () => hitboxPx,
+    bufferPx: DEFAULT_BUFFER_PX,
+  })
+
+  document.addEventListener('mousemove', (e) => interaction.handleMouseMove(e))
+  document.addEventListener('mousedown', (e) => interaction.handleMouseDown(e))
+  document.addEventListener('mouseup', (e) => interaction.handleMouseUp(e))
+  document.addEventListener('contextmenu', (e) => interaction.handleContextMenu(e))
+
   // 暴露至全局，便于开发时手动调试（VERIFY-002 手动验证时可用于切换阴影/镜像）
   window.__spritePlayer = player
+  window.__interaction = interaction
 }
 
 // DOM 就绪后引导

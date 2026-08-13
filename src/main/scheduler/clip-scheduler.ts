@@ -27,10 +27,11 @@ import { BehaviorFsm, type BehaviorState } from '../behavior/fsm'
 import { selectClipForState, type VariantPicker } from '../behavior/state-lookup'
 import {
   planStateTransition,
+  resolveAnchorPose,
+  ANCHOR_STATE,
   type AnchorPose,
   type PlanOptions,
 } from '../behavior/anchor-transition'
-import { resolveAnchorPose } from '../behavior/anchor-transition'
 import { isPlaceholderClip } from '../persistence/placeholder'
 import {
   type SchedulingCycle,
@@ -349,6 +350,93 @@ export class ClipScheduler {
     }
   }
 
+  // —— 交互抢占 (§10) —— //
+
+  /**
+   * 交互抢占 (§10)：立即中断当前播放，播放交互/道具片段。
+   *
+   * 不推进 FSM——交互结束后从原 FSM 状态恢复调度。
+   * 交互片段（petted/clicked/dragged）以及道具片段（eat/play）
+   * 都经此入口触发。
+   *
+   * @param targetState 目标状态键（如 'petted', 'clicked', 'dragged', 'eat', 'play'）
+   * @param nowMs 当前时钟时间 (ms)
+   */
+  preempt(targetState: string, nowMs: number): TickResult {
+    const { clips, getClipDurationSec } = this.deps
+
+    // 选择交互片段（无真实片段时回退占位，§5.5）
+    const targetClip = selectClipForState(targetState, clips)
+
+    // 规划锚定中转（从当前 FSM 状态/片段到交互状态）
+    const plan = planStateTransition(
+      { state: this.state.fsmState as string, clip: this.state.lastClip },
+      { state: targetState, clip: targetClip },
+      clips,
+      this.config.planOptions,
+    )
+
+    const cycle = createSchedulingCycle({
+      fromState: this.state.fsmState as string,
+      toState: targetState,
+      plan,
+      targetClip,
+      getClipDurationSec,
+      nowMs,
+      idleIntervalMs: 0,
+      isPlaceholder: isPlaceholderClip(targetClip),
+    })
+
+    this.state = { ...this.state, phase: 'cycling', cycle }
+
+    // 执行第一项
+    const commands: RenderCommand[] = []
+    const result = this.executeQueueItem(cycle, nowMs)
+    commands.push(...result.commands)
+
+    let cycleCompleted = false
+    if (result.completed) {
+      cycleCompleted = true
+      this.state = this.transitionToIdlePreservingFsm(cycle, nowMs)
+    }
+
+    return {
+      state: this.state,
+      commands,
+      cycleStarted: true,
+      cycleCompleted,
+      petX: this.state.petX,
+    }
+  }
+
+  /**
+   * 结束交互抢占 (§10)：停止当前循环交互片段，返回锚定态恢复调度。
+   *
+   * 用于 petted/dragged 等循环交互片段——这些片段 durationMs=null，
+   * 需外部通知结束。clicked/eat/play 等有限时长片段自然结束后无需调用。
+   *
+   * @param nowMs 当前时钟时间 (ms)
+   */
+  endPreempt(nowMs: number): TickResult {
+    if (this.state.phase === 'cycling' && this.state.cycle) {
+      const cycle = this.state.cycle
+      // 标记队列完成，跳过剩余步骤
+      const completedCycle: SchedulingCycle = {
+        ...cycle,
+        queue: { ...cycle.queue, completed: true },
+      }
+      this.state = this.transitionToIdlePreservingFsm(completedCycle, nowMs)
+    }
+
+    return {
+      state: this.state,
+      commands: [],
+      cycleStarted: false,
+      cycleCompleted: false,
+      petX: this.state.petX,
+    }
+  }
+
   // —— 内部方法 —— //
 
   /**
@@ -563,6 +651,29 @@ export class ClipScheduler {
       petX,
       idleUntilMs: nowMs + cycle.idleIntervalMs,
       showingPlaceholder: cycle.isPlaceholder,
+    }
+  }
+
+  /**
+   * 交互抢占结束后进入空闲阶段（不修改 fsmState）。
+   *
+   * 交互片段结束后返回当前锚定态的片段作为 lastClip，
+   * 保持 fsmState 不变以便从原 FSM 状态恢复正常调度。
+   */
+  private transitionToIdlePreservingFsm(cycle: SchedulingCycle, nowMs: number): SchedulerState {
+    const anchor = resolveAnchorPose(cycle.toState, cycle.targetClip)
+    const anchorState = ANCHOR_STATE[anchor]
+    const anchorClip = selectClipForState(anchorState, this.deps.clips)
+
+    return {
+      ...this.state,
+      phase: 'idle',
+      cycle: null,
+      lastClip: anchorClip,
+      // fsmState 不变：交互结束后从原 FSM 状态恢复
+      currentAnchor: anchor,
+      idleUntilMs: nowMs,
+      showingPlaceholder: false,
     }
   }
 
