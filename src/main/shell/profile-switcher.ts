@@ -44,6 +44,8 @@ export interface TrayMenuCallbacks {
   onExportProfile: () => void
   /** 删除宠物 */
   onDeleteProfile: (id: string) => void
+  /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
+  onImportWizard: () => void
 }
 
 /** 托盘菜单状态 */
@@ -129,6 +131,8 @@ export function buildTrayTemplate(
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
     { label: state.isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
+    { type: 'separator' },
+    { label: '导入片段…', click: () => callbacks.onImportWizard() },
     { type: 'separator' },
     ...buildProfileMenuSection(state.profiles, state.activeProfileId, callbacks),
     { type: 'separator' },

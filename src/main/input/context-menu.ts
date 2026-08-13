@@ -23,6 +23,8 @@ export interface ContextMenuCallbacks {
   onSettings: () => void
   /** 关于 */
   onAbout: () => void
+  /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
+  onImportWizard: () => void
 }
 
 /**
@@ -32,6 +34,8 @@ export interface ContextMenuCallbacks {
  *   喂食
  *   给玩具
  *   静音/取消静音
+ *   ────────
+ *   导入片段…
  *   ────────
  *   隐藏
  *   设置
@@ -49,6 +53,8 @@ export function showContextMenu(
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
     { label: isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
+    { type: 'separator' },
+    { label: '导入片段…', click: () => callbacks.onImportWizard() },
     { type: 'separator' },
     { label: '隐藏', click: () => callbacks.onHide() },
     { label: '设置', click: () => callbacks.onSettings() },

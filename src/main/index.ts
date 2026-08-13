@@ -166,14 +166,18 @@ async function bootstrap(): Promise<void> {
     movePetToVisibleArea()
   })
 
-  // 4. 音频协调器（§11）：应用当前宠物的 shell 设置
+  // 4. 音频协调器（§11）：音频库在 rebuildScheduler 中注入 (§11.1)
   audioCoordinator = new AudioCoordinator(
     [],
     { rhythmConfig: DEFAULT_RHYTHM },
     (cmd: AudioPlayCommand) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         if (cmd.kind === 'play') {
-          mainWindow.webContents.send('audio:play', cmd.file, cmd.volume)
+          // 将文件名解析为项目 audio/ 目录的 file:// URL
+          const audioFile = activeProfile
+            ? pathToFileURL(join(activeProfile.dir, 'audio', cmd.file)).href
+            : cmd.file
+          mainWindow.webContents.send('audio:play', audioFile, cmd.volume)
         } else if (cmd.kind === 'embedded_start') {
           mainWindow.webContents.send('audio:embedded-start')
         } else if (cmd.kind === 'embedded_stop') {
@@ -214,6 +218,7 @@ async function bootstrap(): Promise<void> {
       },
       onSettings: () => openSettings(),
       onAbout: () => console.log('[input] about'),
+      onImportWizard: () => openImportWizard(),
       onFeed: () => {
         needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
         void persistNeedsState()
@@ -280,6 +285,9 @@ function trayCallbacks(): TrayMenuCallbacks {
     },
     onDeleteProfile: (id) => {
       void profileSwitcher?.deleteProfile(id)
+    },
+    onImportWizard: () => {
+      openImportWizard()
     },
   }
 }
@@ -379,6 +387,9 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
   if (!displayManager) return
 
   projectClips = data.clips
+
+  // 注入音频素材库 (§11.1)：在 bootstrap 与 profile 切换时把 loadProject 得到的 AudioMeta[] 注入协调器
+  audioCoordinator?.setLibrary(data.audio)
 
   // 加载行走片段位移曲线 (§5.3)
   const clipsDir = join(activeProfile!.dir, 'clips')
@@ -527,6 +538,7 @@ function processSchedulerCommands(commands: readonly RenderCommand[]): void {
           clipUrl,
           cmd.mirrored,
           cmd.clip.loop,
+          cmd.clip.hitbox,
         )
         break
       }
@@ -639,6 +651,24 @@ function openSettings(): void {
   })
 }
 
+/** 导入向导窗口引用 */
+let importWizardWindow: BrowserWindow | null = null
+
+/**
+ * 打开清单引导式导入向导窗口 (§5.5)。
+ * 导入向导默认指向活跃宠物目录。
+ */
+function openImportWizard(): void {
+  if (importWizardWindow && !importWizardWindow.isDestroyed()) {
+    importWizardWindow.focus()
+    return
+  }
+  importWizardWindow = createImportWizardWindow()
+  importWizardWindow.on('closed', () => {
+    importWizardWindow = null
+  })
+}
+
 /**
  * 将宠物窗口校正到当前显示器可见区域 (§13)。
  *
@@ -708,7 +738,13 @@ function registerSettingsIpc(): void {
   ipcMain.handle('settings:update-personality', async (_e, changes: Partial<Personality>) => {
     if (!settingsStore) return null
     await settingsStore.load()
-    return settingsStore.updatePersonality(changes)
+    const updated = await settingsStore.updatePersonality(changes)
+    // 性格改变后重建调度器，使 weightOverrides/needRates 立即生效 (§9.6)
+    // 无需重启或切换 profile 即可感知行为分布变化
+    // 先持久化当前 needsState（内存中已推进），避免重建时从磁盘读取旧值并重复离线推进
+    await persistNeedsState()
+    await initScheduler()
+    return updated
   })
 
   ipcMain.handle('settings:get-auto-launch', () => {
@@ -735,7 +771,16 @@ function registerSettingsIpc(): void {
 
 app.whenReady().then(() => {
   // 注册导入向导 IPC 处理器 (§5.5)
-  registerImportIpcHandlers()
+  // 当导入目标为活跃 profile 目录时触发调度器重建 (§5.5 → §9)；
+  // 向导默认加载活跃宠物目录 (§12.2)
+  registerImportIpcHandlers({
+    onClipSaved: (projectDir) => {
+      if (activeProfile && projectDir === activeProfile.dir) {
+        void initScheduler()
+      }
+    },
+    getDefaultProjectDir: () => activeProfile?.dir ?? null,
+  })
 
   bootstrap().catch((err) => console.error('[bootstrap] failed:', err))
 

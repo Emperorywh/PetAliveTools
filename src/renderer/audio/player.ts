@@ -42,14 +42,15 @@ export class AudioPlayer {
    * 从池中取一个空闲的 <audio> 元素播放，播毕自动归还。
    * 静音时不播放但仍消耗请求（避免积压）。
    *
-   * @param fileName 音频文件名（相对于 audioBaseUrl）
+   * @param file 音频文件 URL 或路径（file:// 绝对 URL 或相对于 audioBaseUrl 的文件名）
    * @param volumeGain 额外音量增益（0.0–1.0），与全局音量相乘
    */
-  playSound(fileName: string, volumeGain = 1.0): void {
+  playSound(file: string, volumeGain = 1.0): void {
     if (this.muted) return
 
     const audio = this.acquireElement()
-    audio.src = `${this.audioBaseUrl}/${fileName}`
+    // 主进程下发 file:// 绝对 URL 时直接使用；否则相对于 audioBaseUrl 解析
+    audio.src = file.startsWith('file://') ? file : `${this.audioBaseUrl}/${file}`
     audio.volume = Math.min(1, this.volume * volumeGain)
 
     audio.play().catch(() => {

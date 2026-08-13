@@ -46,7 +46,7 @@ const RHYTHM: RhythmConfig = {
 describe('AudioCoordinator', () => {
   it('sends play command on action trigger', () => {
     const commands: AudioPlayCommand[] = []
-    let nowMs = 1000
+    const nowMs = 1000
     const coord = new AudioCoordinator(
       [audioEntry({ id: 'purr_01', file: 'purr_01.wav', category: 'action' })],
       {

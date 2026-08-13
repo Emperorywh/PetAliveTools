@@ -40,6 +40,8 @@ export interface MouseHandlerCallbacks {
   onFeed?: () => void
   /** 给玩具后的需求变更回调 (§10 愉悦↑注意力↑) */
   onToy?: () => void
+  /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
+  onImportWizard?: () => void
 }
 
 /** 音频协调器接口（最小依赖，便于解耦注入） */
@@ -199,6 +201,7 @@ export class MouseHandler {
         onHide: () => this.callbacks.onHide(),
         onSettings: () => this.callbacks.onSettings(),
         onAbout: () => this.callbacks.onAbout(),
+        onImportWizard: () => this.callbacks.onImportWizard?.(),
       },
       this.audio?.isMuted ?? false,
     )

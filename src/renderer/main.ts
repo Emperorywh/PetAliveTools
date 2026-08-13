@@ -35,8 +35,8 @@ const WINDOW_HEIGHT = 400
 /**
  * 默认命中盒 (§5.4 示例值：[x, y, w, h] 归一化)。
  *
- * 运行时由调度器根据当前片段的 hitbox 字段更新；
- * 在完整调度器接线前使用此默认值。
+ * 仅在调度器尚未下发片段 hitbox 前使用；
+ * 运行时由 scheduler:play 载荷中的逐片段 hitbox 更新 (§5.4/§6.1)。
  */
 const DEFAULT_HITBOX: Hitbox = [0.1, 0.05, 0.8, 0.9]
 
@@ -93,10 +93,23 @@ function bootstrap(): void {
   player.startBreathing()
 
   // 调度器桥接：监听主进程播放指令，动态切换片段 (§9)
+  let currentHitboxPx = hitboxToPixels(DEFAULT_HITBOX, {
+    x: 0,
+    y: 0,
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+  })
   const schedulerBridge = window.petalive?.scheduler
   if (schedulerBridge) {
-    schedulerBridge.onPlayClip((fileUrl, mirrored, loop) => {
+    schedulerBridge.onPlayClip((fileUrl, mirrored, loop, hitbox) => {
       player.playClip(fileUrl, mirrored, loop)
+      // 逐片段命中盒更新 (§5.4/§6.1)：切换片段后重算 hitboxPx
+      currentHitboxPx = hitboxToPixels(hitbox, {
+        x: 0,
+        y: 0,
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT,
+      })
     })
     schedulerBridge.onShowGuidance(() => {
       // §13 素材库为空：显示引导，不崩溃
@@ -147,14 +160,8 @@ function bootstrap(): void {
   }
 
   // 交互处理器：命中盒检测、穿透/交互切换、抚摸/点击/拖拽/右键菜单 (§10)
-  const hitboxPx = hitboxToPixels(DEFAULT_HITBOX, {
-    x: 0,
-    y: 0,
-    width: WINDOW_WIDTH,
-    height: WINDOW_HEIGHT,
-  })
   const interaction = new InteractionHandler({
-    getHitboxPx: () => hitboxPx,
+    getHitboxPx: () => currentHitboxPx,
     bufferPx: DEFAULT_BUFFER_PX,
   })
 

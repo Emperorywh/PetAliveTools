@@ -77,6 +77,8 @@ export class ImportWizard {
   private walkCorrection: WalkCorrectionView | null = null
   private referenceFrame: RawFrame | null = null
   private statusMsg: string = ''
+  /** 是否已尝试自动加载默认项目（避免「切换项目」后被再次覆盖） */
+  private defaultLoadTried = false
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -87,6 +89,7 @@ export class ImportWizard {
   render(): void {
     if (!this.projectDir) {
       this.renderProjectSelector()
+      void this.tryLoadDefaultProject()
     } else if (!this.flowState) {
       this.renderChecklist()
     } else {
@@ -159,6 +162,25 @@ export class ImportWizard {
     } catch (err) {
       this.showError(`加载项目失败：${(err as Error).message}`)
       this.projectDir = null
+    }
+  }
+
+  /**
+   * 自动加载默认（活跃宠物）项目目录 (§12.2)。
+   *
+   * 从托盘/右键菜单打开向导时优先加载活跃宠物目录，导入即被运行中的
+   * 宠物使用；每个向导实例只尝试一次，「切换项目」后不再覆盖。
+   */
+  private async tryLoadDefaultProject(): Promise<void> {
+    if (this.defaultLoadTried) return
+    this.defaultLoadTried = true
+    try {
+      const dir = await window.petalive.import.getDefaultProjectDir()
+      if (dir && !this.projectDir) {
+        await this.loadProjectDir(dir)
+      }
+    } catch {
+      /* 无默认目录或加载失败时停留在项目选择界面 */
     }
   }
 

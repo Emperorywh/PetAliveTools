@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ClipMeta } from '../shared/types/clip-meta'
+import type { Hitbox } from '../shared/types/clip-meta'
 import type { TrackFile } from '../shared/types/track-file'
 import type { ProjectData } from '../shared/types/project'
 import type { ImportTranscodeRequest } from '../shared/pipeline/import-flow'
@@ -42,6 +43,8 @@ export interface AudioBridge {
 
 /** 导入向导 IPC 桥接接口 */
 export interface ImportBridge {
+  /** 获取默认（活跃宠物）项目目录；无活跃宠物时为 null */
+  getDefaultProjectDir(): Promise<string | null>
   /** 选择已有项目目录 */
   selectProject(): Promise<string | null>
   /** 创建新项目目录 */
@@ -68,7 +71,7 @@ export interface ImportBridge {
 /** 调度器 IPC 桥接接口 (§9 scheduler → renderer) */
 export interface SchedulerBridge {
   /** 监听主进程播放片段指令（§9 调度器发出 play 命令） */
-  onPlayClip(callback: (fileUrl: string, mirrored: boolean, loop: boolean) => void): void
+  onPlayClip(callback: (fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox) => void): void
   /** 监听素材库为空指引（§13 不崩溃，弹引导采集） */
   onShowGuidance(callback: () => void): void
   /** 监听崩溃恢复通知（§13 重置回锚定态） */
@@ -98,6 +101,7 @@ export interface SettingsBridge {
 contextBridge.exposeInMainWorld('petalive', {
   version: '0.1.0',
   import: {
+    getDefaultProjectDir: () => ipcRenderer.invoke('import:getDefaultProjectDir'),
     selectProject: () => ipcRenderer.invoke('import:selectProject'),
     createProject: (parentDir: string, petName: string) =>
       ipcRenderer.invoke('import:createProject', parentDir, petName),
@@ -153,9 +157,9 @@ contextBridge.exposeInMainWorld('petalive', {
       ipcRenderer.invoke('settings:rebind-hotkey', accelerator),
   } satisfies SettingsBridge,
   scheduler: {
-    onPlayClip: (callback: (fileUrl: string, mirrored: boolean, loop: boolean) => void) => {
-      const handler = (_e: unknown, fileUrl: string, mirrored: boolean, loop: boolean): void =>
-        callback(fileUrl, mirrored, loop)
+    onPlayClip: (callback: (fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox) => void) => {
+      const handler = (_e: unknown, fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox): void =>
+        callback(fileUrl, mirrored, loop, hitbox)
       ipcRenderer.on('scheduler:play', handler)
     },
     onShowGuidance: (callback: () => void) => {

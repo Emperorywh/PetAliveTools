@@ -36,6 +36,7 @@ export const IPC = {
   SELECT_VIDEO: 'import:selectVideo',
   TRANSCODE: 'import:transcode',
   SAVE_CLIP: 'import:saveClip',
+  GET_DEFAULT_PROJECT_DIR: 'import:getDefaultProjectDir',
 } as const
 
 /** 获取当前应用的 ffmpeg AppInfo */
@@ -47,12 +48,27 @@ function getAppInfo(): AppInfo {
   }
 }
 
+/** 导入向导与外壳运行时之间的钩子 */
+export interface ImportIpcHooks {
+  /** 片段保存后的回调（宿主判断目标是否为活跃项目目录并触发调度器重建） */
+  onClipSaved?: (projectDir: string) => void
+  /** 返回默认（活跃宠物）项目目录；无活跃宠物时为 null */
+  getDefaultProjectDir?: () => string | null
+}
+
 /**
  * 注册全部导入向导 IPC 处理器。
  *
+ * @param hooks 外壳运行时钩子（调度器重建、默认项目目录）
+ *
  * 应在 app.whenReady() 后调用。
  */
-export function registerImportIpcHandlers(): void {
+export function registerImportIpcHandlers(hooks: ImportIpcHooks = {}): void {
+  // 默认项目目录：导入向导打开时优先加载活跃宠物目录 (§12.2)
+  ipcMain.handle(IPC.GET_DEFAULT_PROJECT_DIR, () => {
+    return hooks.getDefaultProjectDir?.() ?? null
+  })
+
   // ── 选择项目目录 ── //
   ipcMain.handle(IPC.SELECT_PROJECT, async () => {
     const result = await dialog.showOpenDialog({
@@ -168,6 +184,9 @@ export function registerImportIpcHandlers(): void {
       if (trackFile) {
         await writeTrackFile(paths.clipsDir, clip.id, trackFile)
       }
+
+      // 通知宿主重建调度器（仅当目标为活跃项目目录时由宿主判断）
+      hooks.onClipSaved?.(projectDir)
 
       return { clipId: clip.id, clipsCount: updatedClips.length }
     },

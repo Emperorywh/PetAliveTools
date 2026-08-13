@@ -99,11 +99,13 @@ describe('buildTrayTemplate', () => {
       onToggleHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
+      onImportWizard: () => {},
     }).map((i) => i.label)
 
     expect(labels).toContain('喂食')
     expect(labels).toContain('给玩具')
     expect(labels).toContain('静音')
+    expect(labels).toContain('导入片段…')
     expect(labels).toContain('切换宠物')
     expect(labels).toContain('隐藏')
     expect(labels).toContain('设置')
@@ -121,6 +123,7 @@ describe('buildTrayTemplate', () => {
         onToggleHide: () => {},
         onSettings: () => {},
         onAbout: () => {},
+        onImportWizard: () => {},
       },
     )
     expect(muted.some((i) => i.label === '取消静音')).toBe(true)

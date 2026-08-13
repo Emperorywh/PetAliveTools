@@ -87,7 +87,7 @@ export interface AudioCoordinatorConfig {
  *   coord.dispose()          // 清理
  */
 export class AudioCoordinator {
-  private readonly library: AudioLibrary
+  private library: AudioLibrary
   private config: AudioConfig
   private readonly ambientConfig: AmbientConfig
   private readonly rhythmConfig: RhythmConfig
@@ -267,6 +267,16 @@ export class AudioCoordinator {
   }
 
   // —— 音量与静音 (§11.2) —— //
+
+  /**
+   * 更新音频素材库 (§11.1)。
+   *
+   * 在 profile 切换、导入片段或 zip 导入后调用，
+   * 使协调器使用最新的 audio.meta.json 条目。
+   */
+  setLibrary(audioEntries: readonly AudioMeta[]): void {
+    this.library = buildAudioLibrary(audioEntries)
+  }
 
   /** 设置全局静音 (§11.2) */
   setMuted(muted: boolean): void {
