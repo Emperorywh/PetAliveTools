@@ -6,15 +6,13 @@
  */
 
 export type { Rect, WorkAreaBounds } from './ground-line'
-export { computeGroundLine, groundedWindowY, clampWindowX } from './ground-line'
+export { computeGroundLine, groundedWindowY, clampWindowX, clampWindowY } from './ground-line'
 
 export type { DragPhase, ScreenPoint, DragGeometry, DragState } from './drag'
 export {
-  DEFAULT_RETURN_SPEED_PX_PER_SEC,
   createDragState,
   pickupDrag,
   dragFollow,
   releaseDrag,
-  stepReturn,
   isDragSettled
 } from './drag'

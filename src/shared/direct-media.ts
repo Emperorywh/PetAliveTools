@@ -47,6 +47,14 @@ export interface DirectClipImportResult {
 }
 
 /**
+ * 主进程删除片段后返回的最小结果。
+ * clipsCount 是删除后 clips/ 内可识别片段的总数。
+ */
+export interface DirectClipDeleteResult {
+  readonly clipsCount: number
+}
+
+/**
  * 返回路径中的小写扩展名。
  * 这里只做字符串解析，避免共享层依赖 Node.js path 模块。
  */

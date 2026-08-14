@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeGroundLine, groundedWindowY, clampWindowX, type Rect } from '../../src/shared/spatial'
+import { computeGroundLine, groundedWindowY, clampWindowX, clampWindowY, type Rect } from '../../src/shared/spatial'
 
 describe('computeGroundLine', () => {
   it('returns ground line = workArea.y + workArea.height', () => {
@@ -59,5 +59,30 @@ describe('clampWindowX (§13 异常位置校正回可见区)', () => {
     const wa: Rect = { x: 1920, y: 0, width: 2560, height: 1440 }
     expect(clampWindowX(wa, 1000, 400)).toBe(1920)
     expect(clampWindowX(wa, 4200, 400)).toBe(4080)
+  })
+})
+
+describe('clampWindowY (可见区域 y 钳制)', () => {
+  const workArea: Rect = { x: 0, y: 0, width: 1920, height: 1080 }
+
+  it('keeps window within work area', () => {
+    expect(clampWindowY(workArea, -50, 400)).toBe(0)
+    expect(clampWindowY(workArea, 1000, 400)).toBe(680)
+    expect(clampWindowY(workArea, 500, 400)).toBe(500)
+  })
+
+  it('clamps to top edge when window taller than work area', () => {
+    expect(clampWindowY(workArea, 500, 3000)).toBe(0)
+  })
+
+  it('handles offset work area (taskbar at top)', () => {
+    const wa: Rect = { x: 0, y: 40, width: 1920, height: 1040 }
+    expect(clampWindowY(wa, 10, 400)).toBe(40)
+    expect(clampWindowY(wa, 2000, 400)).toBe(680)
+  })
+
+  it('throws on invalid input', () => {
+    expect(() => clampWindowY(workArea, NaN, 400)).toThrow(/windowY/)
+    expect(() => clampWindowY(workArea, 100, 0)).toThrow(/windowHeight/)
   })
 })

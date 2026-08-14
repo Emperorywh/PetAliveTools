@@ -90,6 +90,7 @@ describe('buildTrayTemplate', () => {
       profiles: [makeProfile({ id: 'a', name: '小白' })],
       activeProfileId: 'a',
       isMuted: false,
+      isPetVisible: true,
     }
     const labels = buildTrayTemplate(state, {
       ...noopCallbacks,
@@ -114,7 +115,7 @@ describe('buildTrayTemplate', () => {
 
   it('toggles mute label based on state', () => {
     const muted = buildTrayTemplate(
-      { profiles: [], activeProfileId: null, isMuted: true },
+      { profiles: [], activeProfileId: null, isMuted: true, isPetVisible: true },
       {
         ...noopCallbacks,
         onFeed: () => {},
@@ -127,6 +128,24 @@ describe('buildTrayTemplate', () => {
       },
     )
     expect(muted.some((i) => i.label === '取消静音')).toBe(true)
+  })
+
+  it('shows 展示 instead of 隐藏 when pet is hidden', () => {
+    const menu = buildTrayTemplate(
+      { profiles: [], activeProfileId: null, isMuted: false, isPetVisible: false },
+      {
+        ...noopCallbacks,
+        onFeed: () => {},
+        onToy: () => {},
+        onToggleMute: () => {},
+        onToggleHide: () => {},
+        onSettings: () => {},
+        onAbout: () => {},
+        onImportWizard: () => {},
+      },
+    )
+    expect(menu.some((i) => i.label === '展示')).toBe(true)
+    expect(menu.some((i) => i.label === '隐藏')).toBe(false)
   })
 })
 
@@ -230,18 +249,19 @@ describe('ProfileSwitcher', () => {
     expect(host.notifications.some((n) => n.includes('保留'))).toBe(true)
   })
 
-  it('getMenuState returns current profiles + active id + mute flag', async () => {
+  it('getMenuState returns current profiles + active id + mute flag + visibility', async () => {
     const manager = new ProfileManager(petsRoot, registryPath)
     const a = await manager.createProfile('小白')
     await manager.setActiveProfile(a.id)
 
     const host = captureHost()
     const switcher = new ProfileSwitcher(manager, fakeDialogs({}), host)
-    const state = await switcher.getMenuState(true)
+    const state = await switcher.getMenuState(true, false)
 
     expect(state.profiles).toHaveLength(1)
     expect(state.activeProfileId).toBe(a.id)
     expect(state.isMuted).toBe(true)
+    expect(state.isPetVisible).toBe(false)
   })
 
   it('importProfile sets active when none was active', async () => {

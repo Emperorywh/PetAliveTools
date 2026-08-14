@@ -101,7 +101,7 @@ describe('MouseHandler (IR-001 抢占命令分发)', () => {
       onHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
-    }, { windowWidth: 400, spriteBaseY: 380 })
+    }, { windowWidth: 400, windowHeight: 400 })
     const scheduler = makeScheduler(CLIPS)
     const dispatcher = new SchedulerCommandDispatcher({
       getWindow: () => win,
@@ -129,7 +129,7 @@ describe('MouseHandler (IR-001 抢占命令分发)', () => {
       onHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
-    }, { windowWidth: 400, spriteBaseY: 380 })
+    }, { windowWidth: 400, windowHeight: 400 })
     handler.setScheduler(makeScheduler(CLIPS))
     expect(() => ipcOnHandlers.get('input:preempt')!({} as unknown, 'clicked')).not.toThrow()
     handler.dispose()
@@ -147,7 +147,7 @@ describe('MouseHandler (IR-010/GAP-005 音频片段上下文)', () => {
       onHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
-    }, { windowWidth: 400, spriteBaseY: 380 })
+    }, { windowWidth: 400, windowHeight: 400 })
     handler.setScheduler(makeScheduler(CLIPS))
 
     const onActionTriggered = vi.fn()
@@ -182,7 +182,7 @@ describe('MouseHandler (IR-008 交互需求反馈)', () => {
       onSettings: () => {},
       onAbout: () => {},
       onInteractionNeeds,
-    }, { windowWidth: 400, spriteBaseY: 380 })
+    }, { windowWidth: 400, windowHeight: 400 })
     handler.setScheduler(makeScheduler(CLIPS))
 
     ipcOnHandlers.get('input:preempt')!({} as unknown, 'petted')

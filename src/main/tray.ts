@@ -33,7 +33,7 @@ export function createTray(callbacks: TrayMenuCallbacks): Tray {
 
   const tray = new Tray(icon)
   tray.setToolTip('PetAliveTools — 桌面宠物')
-  rebuildTrayMenu(tray, { profiles: [], activeProfileId: null, isMuted: false }, callbacks)
+  rebuildTrayMenu(tray, { profiles: [], activeProfileId: null, isMuted: false, isPetVisible: false }, callbacks)
   return tray
 }
 

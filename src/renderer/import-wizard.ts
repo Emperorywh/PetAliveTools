@@ -3,10 +3,11 @@
  *
  * 用户只需选择动作和已制作完成的视频文件；窗口不会加载视频画面、
  * 抽取帧、预览抠像、设置裁剪或循环点，也不会发起转码。
+ * 已导入片段可按文件删除或整组清空，删除只移除 clips/ 中的文件。
  */
 
 import type { ProjectData } from '../shared/types/project'
-import type { ClipDirection } from '../shared/types/clip-meta'
+import type { ClipDirection, ClipMeta } from '../shared/types/clip-meta'
 import {
   SHOOTING_CATEGORIES,
   SHOOTING_LIST,
@@ -111,16 +112,43 @@ export class ImportWizard {
   }
 
   /**
+   * 删除 clips/ 中的片段文件后重新扫描目录，使计数立即刷新。
+   * 删除只移除文件并更新运行时映射，不触发任何视频处理。
+   */
+  private async deleteClips(clips: readonly ClipMeta[]): Promise<void> {
+    if (!this.projectDir || this.busy || clips.length === 0) return
+    const target = clips.length === 1 ? clips[0]!.fileName : `${clips.length} 个片段`
+    this.busy = true
+    this.message = `正在删除：${target}`
+    this.render()
+    try {
+      for (const clip of clips) {
+        await window.petalive.import.deleteClip(this.projectDir, clip.fileName)
+      }
+      this.projectData = await window.petalive.import.loadProject(this.projectDir)
+      this.message = `已删除：${target}`
+    } catch (err) {
+      this.message = `删除失败：${errorMessage(err)}`
+    } finally {
+      this.busy = false
+      this.render()
+    }
+  }
+
+  /**
    * 根据是否已选择项目渲染入口或动作清单。
    * 页面没有 video/canvas 元素，因此不会触发任何媒体读取。
    */
   private render(): void {
+    // 整页重渲染发生在导入/删除之后，保留滚动位置避免每次跳回顶部。
+    const previousScroll = this.container.querySelector('main.direct-import')?.scrollTop ?? 0
     this.container.innerHTML = ''
     const root = element('main', 'direct-import')
     root.appendChild(this.renderHeader())
     if (this.message) root.appendChild(element('div', 'direct-message', this.message))
     root.appendChild(this.projectData ? this.renderActionList() : this.renderProjectChooser())
     this.container.appendChild(root)
+    root.scrollTop = previousScroll
   }
 
   /**
@@ -174,16 +202,17 @@ export class ImportWizard {
   }
 
   /**
-   * 渲染单个动作的方向选择和导入按钮。
+   * 渲染单个动作的方向选择、导入按钮和已导入片段删除列表。
    * 视频文件在用户确认前不会被页面打开。
    */
   private renderActionRow(item: ShootingListItem): HTMLElement {
+    const wrap = element('div', 'direct-item')
     const row = element('div', 'direct-row')
     const info = element('div', 'direct-info')
     info.appendChild(element('strong', '', item.label))
     info.appendChild(element('span', '', item.description))
-    const count = this.projectData?.clips.filter((clip) => clip.state === item.state).length ?? 0
-    info.appendChild(element('small', '', `已导入 ${count} 个片段`))
+    const clips = this.projectData?.clips.filter((clip) => clip.state === item.state) ?? []
+    info.appendChild(element('small', '', `已导入 ${clips.length} 个片段`))
     row.appendChild(info)
 
     let direction: ClipDirection = 'none'
@@ -200,7 +229,38 @@ export class ImportWizard {
     const importButton = button('选择并导入', () => void this.importClip(item, direction))
     importButton.disabled = this.busy
     row.appendChild(importButton)
-    return row
+    wrap.appendChild(row)
+
+    if (clips.length > 0) wrap.appendChild(this.renderClipList(item, clips))
+    return wrap
+  }
+
+  /**
+   * 渲染单个动作下已导入片段的删除列表。
+   * 列表展示 clips/ 中的真实文件名，删除按钮只移除对应文件。
+   */
+  private renderClipList(item: ShootingListItem, clips: readonly ClipMeta[]): HTMLElement {
+    const list = element('div', 'direct-clips')
+    for (const clip of clips) {
+      const line = element('div', 'direct-clip-line')
+      line.appendChild(element('code', '', clip.fileName))
+      const remove = button('删除', () => void this.deleteClips([clip]))
+      remove.className = 'direct-danger'
+      remove.disabled = this.busy
+      line.appendChild(remove)
+      list.appendChild(line)
+    }
+    if (clips.length > 1) {
+      const removeAll = button(`全部删除（${clips.length} 个）`, () => {
+        if (window.confirm(`确定删除「${item.label}」的全部 ${clips.length} 个片段吗？`)) {
+          void this.deleteClips(clips)
+        }
+      })
+      removeAll.className = 'direct-danger direct-remove-all'
+      removeAll.disabled = this.busy
+      list.appendChild(removeAll)
+    }
+    return list
   }
 
   /**
@@ -213,7 +273,8 @@ export class ImportWizard {
     style.id = 'direct-import-style'
     style.textContent = `
       body { margin: 0; background: #17191f; color: #eef1f6; font-family: system-ui, sans-serif; }
-      .direct-import { max-width: 980px; margin: 0 auto; padding: 28px; }
+      /* index.html 已固定 html/body overflow:hidden，滚动在本容器内进行 */
+      .direct-import { max-width: 980px; margin: 0 auto; padding: 28px; height: 100%; box-sizing: border-box; overflow-y: auto; }
       .direct-header { margin-bottom: 22px; }
       .direct-header h1 { margin: 0 0 8px; font-size: 26px; }
       .direct-header p { color: #b9c0cc; line-height: 1.7; }
@@ -225,6 +286,13 @@ export class ImportWizard {
       .direct-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid #343945; }
       .direct-info { display: flex; flex-direction: column; gap: 3px; }
       .direct-info span, .direct-info small { color: #9da6b5; }
+      .direct-clips { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 14px; }
+      .direct-clip-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; background: #1c1f26; border: 1px solid #303542; border-radius: 7px; padding: 6px 10px; }
+      .direct-clip-line code { color: #8ed0ff; word-break: break-all; font-size: 12px; }
+      .direct-clips button { margin-right: 0; padding: 5px 10px; font-size: 12px; }
+      .direct-remove-all { align-self: flex-end; }
+      .direct-danger { background: #45252d; border-color: #7c3a44; color: #f3c5cd; }
+      .direct-danger:hover:enabled { background: #5a3039; }
       button, select { border: 1px solid #4a5363; border-radius: 6px; background: #343b49; color: #f3f5f8; padding: 8px 12px; cursor: pointer; }
       button { margin-right: 8px; }
       button:disabled { opacity: .5; cursor: wait; }

@@ -5,7 +5,7 @@
  *   - enter/exit interactive → setIgnoreMouseEvents 切换 (§6.1)
  *   - preempt → ClipScheduler.preempt() 抢占交互片段 (§10)
  *   - end_preempt → ClipScheduler.endPreempt() 结束循环交互片段
- *   - drag_move → 窗口跟随光标 (§7.5，使用 spatial/drag 纯逻辑)
+ *   - drag_move → 窗口跟随光标 (§7.3，使用 spatial/drag 纯逻辑)
  *   - context_menu → 弹出右键菜单 (§10)
  *
  * 渲染进程负责检测交互类型（抚摸/点击/拖拽）并发出动作；
@@ -25,7 +25,6 @@ import {
   pickupDrag,
   dragFollow,
   releaseDrag,
-  stepReturn,
   type DragState,
   type DragGeometry,
 } from '../../shared/spatial'
@@ -166,7 +165,7 @@ export class MouseHandler {
 
   // —— 拖拽 —— //
 
-  /** 开始拖拽：记录抓取偏移 (§7.5) */
+  /** 开始拖拽：记录抓取偏移 (§7.3) */
   private startDrag(): void {
     if (this.dragState) return
     const cursor = screen.getCursorScreenPoint()
@@ -176,7 +175,7 @@ export class MouseHandler {
   }
 
   /**
-   * 拖拽跟随：窗口跟随光标 (§7.5)。
+   * 拖拽跟随：窗口跟随光标 (§7.3)。
    *
    * 渲染进程发送光标在窗口内的局部坐标，主进程换算为屏幕坐标后
    * 使用 spatial/drag 的 dragFollow 计算窗口新位置。
@@ -195,7 +194,7 @@ export class MouseHandler {
     )
   }
 
-  /** 结束拖拽：松手回地面线 (§7.5) */
+  /** 结束拖拽：松手后停在放置位置（钳制到工作区可见范围，§7.3） */
   private endDrag(): void {
     if (!this.dragState || this.dragState.phase !== 'dragging') return
 
@@ -203,10 +202,8 @@ export class MouseHandler {
     const bounds = computeGroundLine(display.workArea)
 
     this.dragState = releaseDrag(this.dragState, bounds, this.dragGeometry)
-    // Phase 2：松手后即刻回落到地面线
-    this.dragState = stepReturn(this.dragState, bounds, this.dragGeometry, 1.0)
 
-    if (this.dragState.phase === 'idle' && !this.window.isDestroyed()) {
+    if (!this.window.isDestroyed()) {
       this.window.setPosition(
         Math.round(this.dragState.windowPos.x),
         Math.round(this.dragState.windowPos.y),

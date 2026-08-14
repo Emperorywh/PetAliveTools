@@ -10,10 +10,12 @@ import { constants as fsConstants, promises as fs } from 'node:fs'
 import * as path from 'node:path'
 
 import {
+  clipFromFileName,
   isDirectVideoFile,
   makeDirectClipFileName,
   nextDirectClipVariant,
   videoExtension,
+  type DirectClipDeleteResult,
   type DirectClipImportRequest,
   type DirectClipImportResult,
 } from '../shared/direct-media'
@@ -40,6 +42,7 @@ export const DIRECT_IMPORT_IPC = {
   LOAD_PROJECT: 'import:loadProject',
   SELECT_CLIP: 'import:selectClip',
   IMPORT_CLIP: 'import:copyClip',
+  DELETE_CLIP: 'import:deleteClip',
   SELECT_AUDIO: 'import:selectAudio',
   SAVE_AUDIO: 'import:saveAudio',
 } as const
@@ -98,6 +101,15 @@ export function registerDirectImportIpcHandlers(hooks: DirectImportHooks = {}): 
     DIRECT_IMPORT_IPC.IMPORT_CLIP,
     async (_event, projectDir: string, request: DirectClipImportRequest) => {
       const result = await copyClipDirectly(projectDir, request)
+      hooks.onClipImported?.(projectDir)
+      return result
+    },
+  )
+
+  ipcMain.handle(
+    DIRECT_IMPORT_IPC.DELETE_CLIP,
+    async (_event, projectDir: string, fileName: string) => {
+      const result = await deleteClipDirectly(projectDir, fileName)
       hooks.onClipImported?.(projectDir)
       return result
     },
@@ -164,6 +176,28 @@ export async function copyClipDirectly(
     fileName,
     clipsCount: clips.length,
   }
+}
+
+/**
+ * 从项目 clips/ 目录删除一个已导入的片段文件。
+ * 只允许删除命名可识别的片段文件，文件名不允许携带任何路径分隔符。
+ */
+export async function deleteClipDirectly(
+  projectDir: string,
+  fileName: string,
+): Promise<DirectClipDeleteResult> {
+  if (!path.isAbsolute(projectDir)) throw new Error('项目目录必须使用绝对路径')
+  if (fileName === '' || /[\\/]/.test(fileName) || fileName === '.' || fileName === '..') {
+    throw new Error(`片段文件名不合法: ${fileName}`)
+  }
+  if (!clipFromFileName(fileName)) {
+    throw new Error(`该文件不是可识别的导入片段: ${fileName}`)
+  }
+
+  const paths = getProjectPaths(projectDir)
+  await fs.rm(path.join(paths.clipsDir, fileName))
+  const clips = await loadDirectClips(paths.clipsDir)
+  return { clipsCount: clips.length }
 }
 
 /**

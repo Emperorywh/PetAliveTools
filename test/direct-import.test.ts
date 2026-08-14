@@ -8,7 +8,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }))
 
-import { copyClipDirectly } from '../src/main/direct-import-handlers'
+import { copyClipDirectly, deleteClipDirectly } from '../src/main/direct-import-handlers'
 import {
   createDefaultPersona,
   createProject,
@@ -79,5 +79,58 @@ describe('原样片段导入', () => {
       state: 'walk',
       direction: 'right',
     })).rejects.toThrow('项目禁止转码')
+  })
+
+  it('删除单个已导入片段并重新计数', async () => {
+    const sourcePath = path.join(temporaryRoot, 'prepared.mp4')
+    await fs.writeFile(sourcePath, Buffer.from('clip'))
+    const first = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+    const second = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+
+    const result = await deleteClipDirectly(projectDir, second.fileName)
+
+    expect(result.clipsCount).toBe(1)
+    const clipsDir = getProjectPaths(projectDir).clipsDir
+    await expect(fs.access(path.join(clipsDir, second.fileName))).rejects.toThrow()
+    await expect(fs.access(path.join(clipsDir, first.fileName))).resolves.toBeUndefined()
+  })
+
+  it('全部删除后重新导入从 01 重新编号', async () => {
+    const sourcePath = path.join(temporaryRoot, 'prepared.mp4')
+    await fs.writeFile(sourcePath, Buffer.from('clip'))
+    const first = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+    const second = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+    await deleteClipDirectly(projectDir, first.fileName)
+    await deleteClipDirectly(projectDir, second.fileName)
+
+    const reImported = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+
+    expect(reImported.fileName).toBe('idle_sit__none__01.mp4')
+  })
+
+  it('拒绝删除携带路径分隔符或不可识别的文件', async () => {
+    await expect(deleteClipDirectly(projectDir, '../outside.mp4')).rejects.toThrow('片段文件名不合法')
+    await expect(deleteClipDirectly(projectDir, 'a\\b.mp4')).rejects.toThrow('片段文件名不合法')
+    await expect(deleteClipDirectly(projectDir, 'persona.json')).rejects.toThrow('不是可识别的导入片段')
   })
 })

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AudioMeta } from '../shared/types/audio-meta'
 import type { ProjectData } from '../shared/types/project'
 import type {
+  DirectClipDeleteResult,
   DirectClipImportRequest,
   DirectClipImportResult,
 } from '../shared/direct-media'
@@ -62,6 +63,8 @@ export interface ImportBridge {
   selectClip(): Promise<string | null>
   /** 原样复制片段，不转码、不生成视频元数据 */
   copyClip(projectDir: string, request: DirectClipImportRequest): Promise<DirectClipImportResult>
+  /** 删除 clips/ 中的一个已导入片段文件 */
+  deleteClip(projectDir: string, fileName: string): Promise<DirectClipDeleteResult>
   /** 选择音频文件 (§11.1 音频素材入库, IR-013) */
   selectAudio(): Promise<string | null>
   /** 音频素材入库：拷贝至 audio/ 并追加 audio.meta.json (IR-013) */
@@ -126,6 +129,8 @@ contextBridge.exposeInMainWorld('petalive', {
     selectClip: () => ipcRenderer.invoke('import:selectClip'),
     copyClip: (projectDir: string, request: DirectClipImportRequest) =>
       ipcRenderer.invoke('import:copyClip', projectDir, request),
+    deleteClip: (projectDir: string, fileName: string) =>
+      ipcRenderer.invoke('import:deleteClip', projectDir, fileName),
     selectAudio: () => ipcRenderer.invoke('import:selectAudio'),
     saveAudio: (projectDir: string, meta: AudioMeta, sourcePath: string) =>
       ipcRenderer.invoke('import:saveAudio', projectDir, meta, sourcePath),

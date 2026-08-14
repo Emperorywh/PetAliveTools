@@ -56,6 +56,8 @@ export interface TrayMenuState {
   readonly activeProfileId: string | null
   /** 是否静音 */
   readonly isMuted: boolean
+  /** 宠物窗口当前是否可见（隐藏/展示标签据此切换） */
+  readonly isPetVisible: boolean
 }
 
 /**
@@ -136,7 +138,7 @@ export function buildTrayTemplate(
     { type: 'separator' },
     ...buildProfileMenuSection(state.profiles, state.activeProfileId, callbacks),
     { type: 'separator' },
-    { label: '隐藏', click: () => callbacks.onToggleHide() },
+    { label: state.isPetVisible ? '隐藏' : '展示', click: () => callbacks.onToggleHide() },
     { label: '设置', click: () => callbacks.onSettings() },
     { type: 'separator' },
     { label: '关于', click: () => callbacks.onAbout() },
@@ -184,10 +186,10 @@ export class ProfileSwitcher {
   ) {}
 
   /** 供托盘菜单使用的当前状态 */
-  async getMenuState(isMuted: boolean): Promise<TrayMenuState> {
+  async getMenuState(isMuted: boolean, isPetVisible: boolean): Promise<TrayMenuState> {
     const profiles = await this.manager.listProfiles()
     const activeProfileId = await this.manager.getActiveProfileId()
-    return { profiles, activeProfileId, isMuted }
+    return { profiles, activeProfileId, isMuted, isPetVisible }
   }
 
   /**

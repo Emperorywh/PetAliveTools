@@ -84,6 +84,7 @@ const INITIAL_NEEDS: NeedsState = {
 
 /** 窗口固定尺寸 (§6.1) */
 const WINDOW_WIDTH = 400
+const WINDOW_HEIGHT = 400
 const SPRITE_BASE_Y = 380
 
 let mainWindow: BrowserWindow | null = null
@@ -160,6 +161,13 @@ async function bootstrap(): Promise<void> {
     // 宠物回到可见区域 (§13)
     movePetToVisibleArea()
   })
+
+  // 3.5 启动时贴近底部 (§7.3：启动或显示器工作区变化时约束到可见区域并贴近底部)
+  movePetToVisibleArea()
+
+  // 3.6 可见性变化时刷新托盘菜单的「隐藏/展示」标签 (§10)
+  mainWindow.on('show', () => void refreshTrayMenu())
+  mainWindow.on('hide', () => void refreshTrayMenu())
 
   // 4. 音频协调器（§11）：音频库在 rebuildScheduler 中注入 (§11.1)
   audioCoordinator = new AudioCoordinator(
@@ -255,7 +263,7 @@ async function bootstrap(): Promise<void> {
         refreshBehaviorWeights()
       },
     },
-    { windowWidth: WINDOW_WIDTH, spriteBaseY: SPRITE_BASE_Y },
+    { windowWidth: WINDOW_WIDTH, windowHeight: WINDOW_HEIGHT },
   )
   if (audioCoordinator) {
     mouseHandler.setAudioCoordinator(audioCoordinator)
@@ -324,10 +332,11 @@ function trayCallbacks(): TrayMenuCallbacks {
   }
 }
 
-/** 以当前 profile 列表与静音状态重建托盘菜单 (§12.2) */
+/** 以当前 profile 列表、静音与宠物可见状态重建托盘菜单 (§12.2) */
 async function refreshTrayMenu(): Promise<void> {
   if (!tray || !profileSwitcher) return
-  const state = await profileSwitcher.getMenuState(audioCoordinator?.isMuted ?? false)
+  const isPetVisible = mainWindow?.isVisible() ?? false
+  const state = await profileSwitcher.getMenuState(audioCoordinator?.isMuted ?? false, isPetVisible)
   rebuildTrayMenu(tray, state, trayCallbacks())
 }
 

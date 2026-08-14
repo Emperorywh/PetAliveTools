@@ -81,3 +81,27 @@ export function clampWindowX(workArea: Rect, windowX: number, windowWidth: numbe
   }
   return Math.min(Math.max(windowX, minX), maxX)
 }
+
+/**
+ * 把窗口 y 钳制到工作区可见范围内。
+ *
+ * 窗口高于工作区时贴上边缘（DIP 坐标系下正常不会发生）。
+ *
+ * @param workArea 工作区矩形
+ * @param windowY 期望的窗口 y
+ * @param windowHeight 窗口高度
+ */
+export function clampWindowY(workArea: Rect, windowY: number, windowHeight: number): number {
+  if (!Number.isFinite(windowY)) {
+    throw new Error(`invalid windowY: ${windowY}`)
+  }
+  if (!Number.isFinite(windowHeight) || windowHeight <= 0) {
+    throw new Error(`invalid windowHeight: ${windowHeight}`)
+  }
+  const minY = workArea.y
+  const maxY = workArea.y + workArea.height - windowHeight
+  if (maxY <= minY) {
+    return minY
+  }
+  return Math.min(Math.max(windowY, minY), maxY)
+}
