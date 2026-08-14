@@ -1,5 +1,5 @@
 /**
- * 片段生命周期管理 (§9, §8)
+ * 原样片段生命周期管理。
  *
  * 管理 Clip 生命周期循环：选择 → 转移计划 → 执行步骤 → 播放 → 下一个。
  *
@@ -19,8 +19,6 @@ import type {
   TransitionStep,
   AnchorPose,
 } from '../behavior/anchor-transition'
-import type { WalkWindowMapping } from '../../shared/spatial'
-import type { WalkDirection } from '../../shared/spatial'
 
 // —— 播放队列项 —— //
 
@@ -45,18 +43,6 @@ export interface PlaybackItem {
   readonly holdPosition?: boolean
   /** 兜底原因（easing 步骤） */
   readonly reason?: string
-  /** 镜像播放（仅对称宠物，§4.3） */
-  readonly mirrored?: boolean
-  /** 行走映射（仅行走目标片段，§7.2） */
-  readonly walk?: WalkWindowMapping
-  /**
-   * 播放速率倍率 (§9.5 微随机, IR-006)。
-   *
-   * 仅目标片段携带；缺省 = 1.0。非循环目标片段的 durationMs
-   * 已按速率折算（durSec / rate，syncedWalkDuration），
-   * 位移采样经媒体时间（IR-004）天然与速率同步。
-   */
-  readonly playbackRate?: number
   /** 在转移计划中的角色（调试用） */
   readonly role?: string
 }
@@ -76,69 +62,31 @@ export interface PlaybackQueue {
 /**
  * 将转移计划步骤转换为播放队列项。
  *
- * transition / anchor 片段等 play 步骤的 durationMs 取自片段时长参数。
- * hold / easing / fade 步骤有明确时长。
+ * 所有视频 play 步骤都等待渲染端 ended 事件；程序不探测视频时长。
+ * hold / easing / fade 步骤仍有明确的界面持续时间。
  *
  * @param plan 转移计划
- * @param getClipDurationSec 片段时长解析器 (秒)
- * @param targetClip 目标片段的额外播放信息（镜像、行走映射）
  */
 export function buildPlaybackQueue(
   plan: TransitionPlan,
-  getClipDurationSec: (clipId: string) => number,
-  targetExtra?: {
-    readonly mirrored?: boolean
-    readonly walk?: WalkWindowMapping
-    readonly playbackRate?: number
-  },
 ): readonly PlaybackItem[] {
   const items: PlaybackItem[] = []
   for (const step of plan.steps) {
-    items.push(stepToItem(step, getClipDurationSec, targetExtra, step.role === 'target'))
+    items.push(stepToItem(step))
   }
   return items
 }
 
 function stepToItem(
   step: TransitionStep,
-  getClipDurationSec: (clipId: string) => number,
-  targetExtra?: {
-    readonly mirrored?: boolean
-    readonly walk?: WalkWindowMapping
-    readonly playbackRate?: number
-  },
-  isTarget?: boolean,
 ): PlaybackItem {
   switch (step.kind) {
     case 'play': {
       const clip = step.clip!
-      // 目标片段可能携带镜像 / 行走映射 / 播放速率信息
-      const mirrored = isTarget ? targetExtra?.mirrored : undefined
-      const walk = isTarget ? targetExtra?.walk : undefined
-      const playbackRate = isTarget ? targetExtra?.playbackRate : undefined
-      // 循环目标片段由调度器的 idle interval 控制时长，durationMs = null
-      // 非目标 play 步骤（过渡片段、锚定片段）按片段时长执行
-      if (isTarget && clip.loop) {
-        return {
-          kind: 'play',
-          clip,
-          durationMs: null,
-          mirrored,
-          walk,
-          playbackRate,
-          role: step.role,
-        }
-      }
-      const durSec = getClipDurationSec(clip.id)
-      // §9.5 速率抖动：墙钟时长 = 媒体时长 / 速率（syncedWalkDuration，IR-006）
-      const rate = playbackRate !== undefined && playbackRate > 0 ? playbackRate : 1
       return {
         kind: 'play',
         clip,
-        durationMs: Math.round((durSec / rate) * 1000),
-        mirrored,
-        walk,
-        playbackRate,
+        durationMs: null,
         role: step.role,
       }
     }
@@ -155,7 +103,6 @@ function stepToItem(
         clip: step.clip,
         durationMs: step.durationMs!,
         holdPosition: step.holdPosition,
-        playbackRate: isTarget ? targetExtra?.playbackRate : undefined,
         role: step.role,
       }
     case 'fade_out':
@@ -248,13 +195,6 @@ export interface SchedulingCycle {
   readonly targetClip: ClipMeta
   /** 播放队列 */
   readonly queue: PlaybackQueue
-  /** 行走信息（仅行走目标） */
-  readonly walkPlan?: {
-    readonly direction: WalkDirection
-    readonly mirrored: boolean
-    readonly mapping: WalkWindowMapping
-    readonly clipDurationSec: number
-  }
   /** 空闲间隔 (ms)，仅循环目标片段 */
   readonly idleIntervalMs: number
   /** 是否使用了占位片段 */
@@ -278,32 +218,13 @@ export function createSchedulingCycle(params: {
   readonly toState: string
   readonly plan: TransitionPlan
   readonly targetClip: ClipMeta
-  readonly getClipDurationSec: (clipId: string) => number
   readonly nowMs: number
-  readonly walkPlan?: {
-    readonly direction: WalkDirection
-    readonly mirrored: boolean
-    readonly mapping: WalkWindowMapping
-    readonly clipDurationSec: number
-  }
-  /** 目标片段播放速率倍率 (§9.5, IR-006)；缺省 1.0 */
-  readonly playbackRate?: number
   readonly idleIntervalMs: number
   readonly isPlaceholder: boolean
   /** 完成后保持 FSM 状态（稀有动作插入，§9.5） */
   readonly preserveFsm?: boolean
 }): SchedulingCycle {
-  const items = buildPlaybackQueue(
-    params.plan,
-    params.getClipDurationSec,
-    params.walkPlan || params.playbackRate !== undefined
-      ? {
-          mirrored: params.walkPlan?.mirrored,
-          walk: params.walkPlan?.mapping,
-          playbackRate: params.playbackRate,
-        }
-      : undefined,
-  )
+  const items = buildPlaybackQueue(params.plan)
   const queue = initPlaybackQueue(items, params.nowMs)
   return {
     fromState: params.fromState,
@@ -311,7 +232,6 @@ export function createSchedulingCycle(params: {
     plan: params.plan,
     targetClip: params.targetClip,
     queue,
-    walkPlan: params.walkPlan,
     idleIntervalMs: params.idleIntervalMs,
     isPlaceholder: params.isPlaceholder,
     usedFallback: params.plan.usedFallback,

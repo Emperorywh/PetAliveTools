@@ -1,7 +1,7 @@
 /**
  * 设置持久化 (settings store) — §12.4
  *
- * 读写外壳设置（显示器/尺度/音量/节律频率/自启/快捷键）与性格参数，
+ * 读写外壳设置（显示器/音量/节律频率/自启/快捷键）与性格参数，
  * 持久化到 behavior-config.json（shell 字段）与 persona.json。
  *
  * 运行于主进程。
@@ -44,9 +44,6 @@ export function mergeShellSettings(
   let merged: ShellSettings = { ...base }
   if (changes.displayId !== undefined) {
     merged = { ...merged, displayId: changes.displayId }
-  }
-  if (changes.screenPercent !== undefined) {
-    merged = { ...merged, screenPercent: clamp(changes.screenPercent, 0.01, 0.99) }
   }
   if (changes.volume !== undefined) {
     merged = { ...merged, volume: clamp(changes.volume, 0, 1) }
@@ -95,7 +92,6 @@ function clampOptional(value: number | undefined, fallback: number): number {
 function createDefaultPersona(): Persona {
   return {
     name: '宠物',
-    symmetrical: true,
     personality: {
       liveliness: 0.5,
       laziness: 0.5,
@@ -268,7 +264,6 @@ function ensurePersona(raw: unknown): Persona {
   const personality = obj['personality']
   return {
     name: typeof obj['name'] === 'string' ? obj['name'] : '宠物',
-    symmetrical: typeof obj['symmetrical'] === 'boolean' ? obj['symmetrical'] : true,
     personality:
       typeof personality === 'object' && personality !== null
         ? (personality as Personality)

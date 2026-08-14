@@ -1,14 +1,13 @@
 /**
- * 项目备份 / 导入导出 (§12.3)
+ * 直接片段项目的备份 / 导入导出。
  *
  * pet 项目目录自包含（§12.1），导出 = 整个目录打包为 zip，
  * 导入 = 校验 zip 内数据后解包到 pets 根目录成为新 profile。
  *
  * 导入校验（写入磁盘之前全部通过才落盘）：
  * 1. zip 结构可解析，条目名安全（无 `..`、无绝对路径、无盘符）
- * 2. 五个必需 JSON 文件齐全，且通过 schema 校验
- * 3. clips.meta.json 引用的片段文件与位移曲线、audio.meta.json 引用的
- *    音频文件在 zip 内存在
+ * 2. 四个应用配置 JSON 文件齐全，且通过 schema 校验
+ * 3. clips/ 中的视频按文件名直接识别，audio.meta.json 引用的音频存在
  *
  * 运行于主进程（与 vitest node 环境）。
  */
@@ -21,12 +20,12 @@ import {
   validatePersona,
   validateNeedsState,
   validateBehaviorConfig,
-  validateClipMetaArray,
   validateAudioMetaArray,
 } from '../../shared/schemas'
 import type { ValidationErrors } from '../../shared/schemas'
 import { createZipArchive, readZipArchive, type ZipEntry } from './zip'
 import { getProjectPaths } from './project-io'
+import { clipFromFileName, isDirectVideoFile } from '../../shared/direct-media'
 
 // ── 导出 ── //
 
@@ -64,8 +63,7 @@ export async function collectProjectFiles(projectDir: string): Promise<string[]>
 /**
  * 将整个 pet 项目目录导出为 zip (§12.3)。
  *
- * 打包目录下全部文件（persona、needs-state、behavior-config、
- * clips/、clips.meta.json、audio/、audio.meta.json）。
+ * 打包目录下全部文件，包括 clips/ 中原样保存的视频。
  *
  * @param projectDir 项目目录
  * @param zipPath 输出 zip 路径
@@ -159,7 +157,6 @@ export function validateProjectEntries(
     'persona.json',
     'needs-state.json',
     'behavior-config.json',
-    'clips.meta.json',
     'audio.meta.json',
   ] as const
   for (const file of required) {
@@ -173,7 +170,6 @@ export function validateProjectEntries(
     ['persona.json', validatePersona],
     ['needs-state.json', validateNeedsState],
     ['behavior-config.json', validateBehaviorConfig],
-    ['clips.meta.json', validateClipMetaArray],
     ['audio.meta.json', validateAudioMetaArray],
   ]
   for (const [file, validate] of validators) {
@@ -189,17 +185,14 @@ export function validateProjectEntries(
   }
   if (errors.length > 0) return errors
 
-  // 3. 元数据引用的素材文件在归档内存在
-  const clips = parsed.get('clips.meta.json') as ClipMeta[]
-  const audio = parsed.get('audio.meta.json') as AudioMeta[]
-  for (const clip of clips) {
-    if (!byName.has(`clips/${clip.id}.webm`)) {
-      errors.push(`clips/${clip.id}.webm: referenced by clips.meta.json but missing`)
-    }
-    if (clip.track !== undefined && !byName.has(`clips/${clip.track}`)) {
-      errors.push(`clips/${clip.track}: referenced by clips.meta.json but missing`)
+  // 3. 可直接播放的 clips/ 文件名必须能识别；旧轨迹和说明文件会被忽略
+  for (const entry of entries.filter((candidate) => candidate.name.startsWith('clips/'))) {
+    const fileName = entry.name.slice('clips/'.length)
+    if (fileName && isDirectVideoFile(fileName) && clipFromFileName(fileName) === null) {
+      errors.push(`${entry.name}: unsupported or unrecognized direct clip name`)
     }
   }
+  const audio = parsed.get('audio.meta.json') as AudioMeta[]
   for (const entry of audio) {
     if (!byName.has(`audio/${entry.file}`)) {
       errors.push(`audio/${entry.file}: referenced by audio.meta.json but missing`)
@@ -292,7 +285,10 @@ export async function importProjectFromZip(
       persona,
       needsState: JSON.parse(byName.get('needs-state.json')!.toString('utf-8')) as NeedsState,
       behaviorConfig: JSON.parse(byName.get('behavior-config.json')!.toString('utf-8')) as BehaviorConfig,
-      clips: JSON.parse(byName.get('clips.meta.json')!.toString('utf-8')) as ClipMeta[],
+      clips: entries
+        .filter((entry) => entry.name.startsWith('clips/'))
+        .map((entry) => clipFromFileName(entry.name.slice('clips/'.length)))
+        .filter((clip): clip is ClipMeta => clip !== null),
       audio: JSON.parse(byName.get('audio.meta.json')!.toString('utf-8')) as AudioMeta[],
     },
   }

@@ -1,15 +1,14 @@
 /**
- * 调度渲染命令分发器 (IR-001 / IR-003 / IR-009 / IR-014)
+ * 原样片段调度命令分发器。
  *
  * ClipScheduler 输出 RenderCommand，本模块负责把命令翻译成
  * 窗口操作与渲染进程 IPC：
  *
- *   - play        → `scheduler:play`     结构化载荷 (IR-002：锚点/尺度/循环点/速率/embeddedAudio)
+ *   - play        → `scheduler:play`     原始文件 URL 与整段循环标记
  *   - fade_in     → `scheduler:fade-in`  道具淡入 (§8.4, IR-003)
  *   - fade_out    → `scheduler:fade-out` 道具淡出 (§8.4, IR-003)
  *   - easing      → `scheduler:easing`   兜底缓动 (§8.3, IR-003)
  *   - idle        → 锚定片段保活重播（节流, IR-014）
- *   - update_position → 窗口平移 (§7.2)
  *   - hold        → 调度器内部时序控制，无需 IPC
  *
  * 音频接线 (IR-009)：play 命令携带真实片段回调动作触发声 (§11.1)；
@@ -23,7 +22,7 @@
 
 import type { BrowserWindow } from 'electron'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { localPathToMediaUrl } from '../../shared/media-url'
 import type { ClipMeta } from '../../shared/types/clip-meta'
 import type {
   PlayClipPayload,
@@ -31,7 +30,6 @@ import type {
   FadeOutPayload,
   EasingPayload,
 } from '../../shared/types/play-command'
-import type { AnchorPose } from '../behavior/anchor-transition'
 import { isPlaceholderClip } from '../persistence/placeholder'
 import type { RenderCommand } from '../scheduler/clip-scheduler'
 
@@ -42,7 +40,7 @@ export const SCHEDULER_IPC = {
   fadeOut: 'scheduler:fade-out',
   easing: 'scheduler:easing',
   guidance: 'scheduler:guidance',
-  videoTime: 'scheduler:video-time',
+  clipEnded: 'scheduler:clip-ended',
 } as const
 
 /**
@@ -94,10 +92,10 @@ export class SchedulerCommandDispatcher {
     for (const cmd of commands) {
       switch (cmd.kind) {
         case 'play':
-          this.dispatchPlay(win, cmd.clip, cmd.mirrored, cmd.anchor, cmd.playbackRate)
+          this.dispatchPlay(win, cmd.clip)
           break
         case 'fade_in':
-          this.dispatchFadeIn(win, cmd.clip, cmd.durationMs, cmd.mirrored, cmd.anchor, cmd.playbackRate)
+          this.dispatchFadeIn(win, cmd.clip, cmd.durationMs)
           break
         case 'fade_out':
           this.dispatchFadeOut(win, cmd.clip, cmd.durationMs)
@@ -108,9 +106,6 @@ export class SchedulerCommandDispatcher {
         case 'idle':
           this.dispatchIdleKeepAlive(win, cmd.clip)
           break
-        case 'update_position':
-          win.setPosition(Math.round(cmd.x), Math.round(cmd.y), false)
-          break
         // hold — 调度器内部时序控制，无需 IPC
       }
     }
@@ -119,15 +114,9 @@ export class SchedulerCommandDispatcher {
   // —— 各命令分发 —— //
 
   /** play → scheduler:play (IR-002 结构化载荷) + 动作声 (IR-009) */
-  private dispatchPlay(
-    win: BrowserWindow,
-    clip: ClipMeta,
-    mirrored: boolean,
-    anchor: AnchorPose,
-    playbackRate: number,
-  ): void {
+  private dispatchPlay(win: BrowserWindow, clip: ClipMeta): void {
     if (isPlaceholderClip(clip)) return
-    const payload = this.buildPlayPayload(clip, mirrored, anchor, playbackRate)
+    const payload = this.buildPlayPayload(clip)
     if (!payload) return
 
     // IR-010：上一个 embeddedAudio 片段切换走 → 通知内嵌音轨结束
@@ -148,12 +137,9 @@ export class SchedulerCommandDispatcher {
     win: BrowserWindow,
     clip: ClipMeta,
     durationMs: number,
-    mirrored: boolean,
-    anchor: AnchorPose,
-    playbackRate: number,
   ): void {
     if (isPlaceholderClip(clip)) return
-    const payload = this.buildPlayPayload(clip, mirrored, anchor, playbackRate)
+    const payload = this.buildPlayPayload(clip)
     if (!payload) return
     const fadePayload: FadeInPayload = { clip: payload, durationMs }
     win.webContents.send(SCHEDULER_IPC.fadeIn, fadePayload)
@@ -187,7 +173,7 @@ export class SchedulerCommandDispatcher {
     ) {
       return
     }
-    const payload = this.buildPlayPayload(clip, false, clip.anchor === 'stand' ? 'stand' : 'sit', 1)
+    const payload = this.buildPlayPayload(clip)
     if (!payload) return
     this.lastIdleKeepAliveAtMs = nowMs
     this.lastIdleKeepAliveClipId = clip.id
@@ -197,28 +183,17 @@ export class SchedulerCommandDispatcher {
   // —— 载荷构建 —— //
 
   /** 构建结构化播放载荷 (IR-002)；项目目录缺失时返回 null */
-  private buildPlayPayload(
-    clip: ClipMeta,
-    mirrored: boolean,
-    anchor: AnchorPose,
-    playbackRate: number,
-  ): PlayClipPayload | null {
+  private buildPlayPayload(clip: ClipMeta): PlayClipPayload | null {
     const projectDir = this.deps.getProjectDir()
     if (!projectDir) return null
-    const clipFile = join(projectDir, 'clips', `${clip.id}.webm`)
+    const clipFile = join(projectDir, 'clips', clip.fileName)
     return {
       clipId: clip.id,
-      clipUrl: pathToFileURL(clipFile).href,
-      mirrored,
+      // dev http 源无法加载 file://，统一走 petmedia:// 特权媒体协议
+      clipUrl: localPathToMediaUrl(clipFile),
       loop: clip.loop,
       hitbox: clip.hitbox,
-      anchor,
-      scaleHint: clip.scaleHint,
-      loopInSec: clip.loopInSec,
-      loopOutSec: clip.loopOutSec,
-      playbackRate,
       embeddedAudio: clip.embeddedAudio,
-      walk: clip.state === 'walk',
     }
   }
 }

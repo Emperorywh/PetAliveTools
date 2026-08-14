@@ -1,217 +1,105 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
+
 import {
-  buildPlaybackQueue,
-  initPlaybackQueue,
-  currentItem,
-  isCurrentItemDone,
   advanceQueue,
+  buildPlaybackQueue,
   completeCurrentItem,
   createSchedulingCycle,
+  currentItem,
+  initPlaybackQueue,
+  isCurrentItemDone,
   type PlaybackItem,
 } from '../../src/main/scheduler/lifecycle'
-import { planStateTransition } from '../../src/main/behavior/anchor-transition'
-import type { PlanContext } from '../../src/main/behavior/anchor-transition'
+import type { TransitionPlan } from '../../src/main/behavior/anchor-transition'
 import type { ClipMeta } from '../../src/shared/types/clip-meta'
 
-// —— 测试辅助 —— //
-
-function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): ClipMeta {
+/**
+ * 构造仅用于调度测试的内存片段。
+ * fileName 指向已经存在的原样媒体文件，不包含任何处理参数。
+ */
+function clip(id: string, loop = false): ClipMeta {
   return {
+    id,
+    fileName: `${id}.webm`,
+    state: 'idle_sit',
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
-    loop: false,
-    loopInSec: null,
-    loopOutSec: null,
+    loop,
     signature: false,
     variant: 1,
     prop: false,
-    embeddedAudio: false,
+    embeddedAudio: true,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
-    ...overrides,
   }
 }
 
-function transitionClip(from: string, to: string): ClipMeta {
-  return clip({ id: `transition_${from}_to_${to}`, state: 'transition', anchor: 'none' })
-}
-
-function fullStore(): ClipMeta[] {
-  return [
-    clip({ id: 'idle_sit_01', state: 'idle_sit' }),
-    clip({ id: 'stand_01', state: 'stand', anchor: 'stand' }),
-    clip({ id: 'walk_left_01', state: 'walk', anchor: 'stand', direction: 'left' }),
-    clip({ id: 'walk_right_01', state: 'walk', anchor: 'stand', direction: 'right' }),
-    clip({ id: 'lie_01', state: 'lie', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 4 }),
-    clip({ id: 'sleep_01', state: 'sleep', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 8 }),
-    clip({ id: 'groom_01', state: 'groom', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 3 }),
-    transitionClip('sit', 'stand'),
-    transitionClip('stand', 'sit'),
-    transitionClip('sit', 'lie'),
-    transitionClip('lie', 'sit'),
-    transitionClip('sit', 'sleep'),
-    transitionClip('sleep', 'sit'),
-  ]
-}
-
-function ctx(state: string, clip?: ClipMeta): PlanContext {
-  return { state, clip: clip ?? null }
-}
-
-const durationProvider = (clipId: string): number => {
-  if (clipId.startsWith('transition_')) return 0.5
-  if (clipId.startsWith('walk_')) return 2.0
-  if (clipId.startsWith('idle_sit')) return 3.0
-  if (clipId.startsWith('stand')) return 2.0
-  return 2.0
-}
-
-// —— buildPlaybackQueue —— //
-
-describe('buildPlaybackQueue (§8, §9)', () => {
-  it('converts same-anchor transition to single play step', () => {
-    const plan = planStateTransition(ctx('idle_sit'), ctx('stand'), fullStore())
-    const items = buildPlaybackQueue(plan, durationProvider)
-    // idle_sit → stand: cross anchor, needs transition_sit_to_stand then target
-    expect(items.length).toBeGreaterThanOrEqual(1)
-    expect(items.some((i) => i.kind === 'play')).toBe(true)
-  })
-
-  it('handles cross-anchor transition with intermediate clip', () => {
-    const plan = planStateTransition(ctx('idle_sit'), ctx('walk'), fullStore())
-    const items = buildPlaybackQueue(plan, durationProvider)
-    // Should have: cross_anchor play (transition) + target play
-    const playSteps = items.filter((i) => i.kind === 'play')
-    expect(playSteps.length).toBeGreaterThanOrEqual(2)
-  })
-
-  it('sets durationMs for non-loop play items', () => {
-    const plan = planStateTransition(ctx('idle_sit'), ctx('stand'), fullStore())
-    const items = buildPlaybackQueue(plan, durationProvider)
-    for (const item of items) {
-      if (item.kind === 'play' && item.role !== 'target') {
-        expect(item.durationMs).not.toBeNull()
-      }
-    }
-  })
-
-  it('sets durationMs=null for loop target items', () => {
-    const plan = planStateTransition(ctx('idle_sit'), ctx('sleep'), fullStore())
-    const items = buildPlaybackQueue(plan, durationProvider)
-    const targetItem = items.find((i) => i.role === 'target')
-    expect(targetItem).toBeDefined()
-    expect(targetItem!.durationMs).toBeNull()
-  })
-
-  it('includes easing items for fallback', () => {
-    const clipsNoTransition = [clip({ id: 'idle_sit_01', state: 'idle_sit' })]
-    const plan = planStateTransition(ctx('idle_sit'), ctx('stand'), clipsNoTransition)
-    const items = buildPlaybackQueue(plan, durationProvider)
-    expect(items.some((i) => i.kind === 'easing')).toBe(true)
-  })
-})
-
-// —— PlaybackQueue state machine —— //
-
-describe('PlaybackQueue state machine', () => {
-  function makeQueue(items: PlaybackItem[], nowMs = 0) {
-    return initPlaybackQueue(items, nowMs)
+/**
+ * 构造一条最小转移计划。
+ * 计划只引用完整媒体文件，不提供视频时长或循环区间。
+ */
+function plan(steps: TransitionPlan['steps']): TransitionPlan {
+  return {
+    from: 'idle_sit',
+    to: 'idle_sit',
+    steps,
+    crossAnchor: false,
+    anchors: { from: 'sit', to: 'sit' },
+    usedFallback: false,
   }
+}
 
-  it('returns null currentItem when completed', () => {
-    const queue = makeQueue([])
-    expect(queue.completed).toBe(true)
-    expect(currentItem(queue)).toBeNull()
+describe('原样片段播放队列', () => {
+  it('所有视频步骤都等待 ended，而不是依赖探测出的时长', () => {
+    const source = clip('idle_sit__none__01')
+    const items = buildPlaybackQueue(plan([
+      { kind: 'play', role: 'target', clip: source },
+    ]))
+
+    expect(items).toEqual([
+      { kind: 'play', role: 'target', clip: source, durationMs: null },
+    ])
+    const queue = initPlaybackQueue(items, 0)
+    expect(isCurrentItemDone(queue, 60_000)).toBe(false)
   })
 
-  it('returns first item as current', () => {
+  it('ended 通知显式推进到下一个完整文件', () => {
     const items: PlaybackItem[] = [
-      { kind: 'hold', anchor: 'sit', durationMs: 100, role: 'anchor_hold' },
-      { kind: 'easing', durationMs: 50, reason: 'test', role: 'fallback' },
+      { kind: 'play', clip: clip('first'), durationMs: null, role: 'cross_anchor' },
+      { kind: 'play', clip: clip('second'), durationMs: null, role: 'target' },
     ]
-    const queue = makeQueue(items)
-    expect(currentItem(queue)?.kind).toBe('hold')
-  })
+    const queue = completeCurrentItem(initPlaybackQueue(items, 0), 900)
 
-  it('isCurrentItemDone returns false for zero elapsed', () => {
-    const items: PlaybackItem[] = [
-      { kind: 'hold', anchor: 'sit', durationMs: 100, role: 'anchor_hold' },
-    ]
-    const queue = makeQueue(items, 0)
-    expect(isCurrentItemDone(queue, 0)).toBe(false)
-  })
-
-  it('isCurrentItemDone returns true after duration elapsed', () => {
-    const items: PlaybackItem[] = [
-      { kind: 'hold', anchor: 'sit', durationMs: 100, role: 'anchor_hold' },
-    ]
-    const queue = makeQueue(items, 0)
-    expect(isCurrentItemDone(queue, 100)).toBe(true)
-    expect(isCurrentItemDone(queue, 200)).toBe(true)
-  })
-
-  it('isCurrentItemDone returns false for durationMs=null items', () => {
-    const items: PlaybackItem[] = [
-      { kind: 'play', clip: clip({ id: 'x', state: 'idle_sit' }), durationMs: null, role: 'target' },
-    ]
-    const queue = makeQueue(items, 0)
-    expect(isCurrentItemDone(queue, 99999)).toBe(false)
-  })
-
-  it('advanceQueue moves to next item', () => {
-    const items: PlaybackItem[] = [
-      { kind: 'hold', anchor: 'sit', durationMs: 100, role: 'anchor_hold' },
-      { kind: 'easing', durationMs: 50, reason: 'test', role: 'fallback' },
-    ]
-    let queue = makeQueue(items, 0)
-    queue = advanceQueue(queue, 100)
-    expect(currentItem(queue)?.kind).toBe('easing')
     expect(queue.currentIndex).toBe(1)
+    expect(currentItem(queue)?.clip?.id).toBe('second')
   })
 
-  it('advanceQueue marks completed on last item', () => {
+  it('界面停留步骤仍按自身毫秒时长推进', () => {
     const items: PlaybackItem[] = [
       { kind: 'hold', anchor: 'sit', durationMs: 100, role: 'anchor_hold' },
     ]
-    let queue = makeQueue(items, 0)
-    queue = advanceQueue(queue, 100)
-    expect(queue.completed).toBe(true)
+    const queue = initPlaybackQueue(items, 20)
+
+    expect(isCurrentItemDone(queue, 119)).toBe(false)
+    expect(isCurrentItemDone(queue, 120)).toBe(true)
+    expect(advanceQueue(queue, 120).completed).toBe(true)
   })
 
-  it('completeCurrentItem advances queue for null-duration items', () => {
-    const items: PlaybackItem[] = [
-      { kind: 'play', clip: clip({ id: 'x', state: 'idle_sit' }), durationMs: null, role: 'target' },
-      { kind: 'easing', durationMs: 50, reason: 'test', role: 'fallback' },
-    ]
-    let queue = makeQueue(items, 0)
-    queue = completeCurrentItem(queue, 5000)
-    expect(queue.currentIndex).toBe(1)
-    expect(currentItem(queue)?.kind).toBe('easing')
-  })
-})
-
-// —— createSchedulingCycle —— //
-
-describe('createSchedulingCycle', () => {
-  it('builds a complete cycle from plan + target info', () => {
-    const plan = planStateTransition(ctx('idle_sit'), ctx('stand'), fullStore())
+  it('调度周期不接收视频时长解析器', () => {
+    const target = clip('idle_sit__none__01', true)
+    const transition = plan([{ kind: 'play', role: 'target', clip: target }])
     const cycle = createSchedulingCycle({
       fromState: 'idle_sit',
-      toState: 'stand',
-      plan,
-      targetClip: clip({ id: 'stand_01', state: 'stand', anchor: 'stand' }),
-      getClipDurationSec: durationProvider,
-      nowMs: 0,
-      idleIntervalMs: 4000,
+      toState: 'idle_sit',
+      plan: transition,
+      targetClip: target,
+      nowMs: 10,
+      idleIntervalMs: 4_000,
       isPlaceholder: false,
     })
-    expect(cycle.fromState).toBe('idle_sit')
-    expect(cycle.toState).toBe('stand')
-    expect(cycle.idleIntervalMs).toBe(4000)
-    expect(cycle.isPlaceholder).toBe(false)
-    expect(cycle.queue.completed).toBe(false)
-    expect(cycle.queue.items.length).toBeGreaterThanOrEqual(1)
+
+    expect(cycle.queue.items[0]?.durationMs).toBeNull()
+    expect(cycle.targetClip.fileName).toBe('idle_sit__none__01.webm')
   })
 })

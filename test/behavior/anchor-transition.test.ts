@@ -19,18 +19,16 @@ import type { ClipMeta } from '../../src/shared/types/clip-meta'
 
 function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): ClipMeta {
   return {
+    fileName: 'test.webm',
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
     loop: false,
-    loopInSec: null,
-    loopOutSec: null,
     signature: false,
     variant: 1,
     prop: false,
     embeddedAudio: false,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
     ...overrides,
   }
@@ -47,9 +45,9 @@ function fullStore(): ClipMeta[] {
     clip({ id: 'stand_01', state: 'stand', anchor: 'stand' }),
     clip({ id: 'walk_left_01', state: 'walk', anchor: 'stand', direction: 'left' }),
     clip({ id: 'turn_01', state: 'turn', anchor: 'stand', direction: 'left' }),
-    clip({ id: 'lie_01', state: 'lie', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 4 }),
-    clip({ id: 'sleep_01', state: 'sleep', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 8 }),
-    clip({ id: 'groom_01', state: 'groom', loop: true, anchor: 'none', loopInSec: 0, loopOutSec: 3 }),
+    clip({ id: 'lie_01', state: 'lie', loop: true, anchor: 'none' }),
+    clip({ id: 'sleep_01', state: 'sleep', loop: true, anchor: 'none' }),
+    clip({ id: 'groom_01', state: 'groom', loop: true, anchor: 'none' }),
     transitionClip('sit', 'stand'),
     transitionClip('stand', 'sit'),
     transitionClip('sit', 'lie'),

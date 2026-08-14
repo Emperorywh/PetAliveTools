@@ -5,19 +5,17 @@ import type { ClipMeta } from '../../src/shared/types/clip-meta'
 function clip(overrides: Partial<ClipMeta> = {}): ClipMeta {
   return {
     id: 'test',
+    fileName: 'test.webm',
     state: 'idle_sit',
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
     loop: false,
-    loopInSec: null,
-    loopOutSec: null,
     signature: false,
     variant: 1,
     prop: false,
     embeddedAudio: false,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
     ...overrides,
   }

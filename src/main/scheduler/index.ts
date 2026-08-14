@@ -1,8 +1,8 @@
 /**
- * 调度衔接模块 (scheduler) — 片段调度与生命周期编排
+ * 原样片段调度与生命周期编排入口。
  *
  * 负责：连接行为 FSM (§9) 与渲染层，管理片段生命周期循环
- * （选择 → 锚定中转 → 播放 → 下一个），行走调度 (§7.2)，
+ * （选择 → 锚定中转 → 完整播放 → 下一个），
  * 空闲间隔调度 (§9.5)，变体耗尽兜底 (§9.5 第 4 条)，
  * 缺素材占位 (§5.5)。
  *
@@ -10,9 +10,6 @@
  *
  * 运行于主进程，逻辑为纯函数 / 纯状态机，可供测试直接调用。
  */
-
-export { planWalk, chooseWalkDirection, directionAfterWalk } from './walk-planner'
-export type { WalkPlan, WalkPlanInput, WalkDirectionChoice } from './walk-planner'
 
 export {
   createVariantTracker,
@@ -52,24 +49,15 @@ export type {
   ClipSchedulerDeps,
   RenderCommand,
   SchedulerState,
-  SchedulerPhase,
   TickResult,
 } from './clip-scheduler'
 
 // —— TASK-013: 调度微随机化 —— //
 
 export {
-  jitteredPlaybackRate,
-  syncedWalkDuration,
   jitteredIdleDuration,
-  jitteredPositionX,
   shuffleVariants,
   shouldInsertRareAction,
   effectiveRareActionProbability,
   pickRareAction,
-  generateRandomizationParams,
-} from './randomization'
-export type {
-  RandomizationParams,
-  RandomizationOptions,
 } from './randomization'

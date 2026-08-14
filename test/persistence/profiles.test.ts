@@ -59,7 +59,6 @@ describe('ProfileManager.createProfile', () => {
       paths.persona,
       paths.needsState,
       paths.behaviorConfig,
-      paths.clipsMeta,
       paths.audioMeta,
     ]) {
       await expect(fs.access(file)).resolves.toBeUndefined()

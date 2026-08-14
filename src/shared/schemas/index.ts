@@ -1,15 +1,12 @@
 /**
- * Schema 验证模块入口
+ * 配置文件 Schema 验证入口。
  *
- * 导出所有类型验证函数与默认值工厂。
- * 参见 SPEC §5.4 (片段 schema)、§12.1 (项目格式)。
+ * 视频片段不再使用 JSON 元数据或轨迹 Schema，因此这里只验证应用配置和音频库。
  */
 
 export { validatePersona, defaultPersonality } from './persona'
 export { validateNeedsState, defaultNeedsState } from './needs-state'
 export { validateBehaviorConfig, validateShellSettings, defaultBehaviorConfig, defaultShellSettings } from './behavior-config'
-export { validateClipMeta, validateClipMetaArray } from './clip-meta'
 export { validateAudioMeta, validateAudioMetaArray } from './audio-meta'
-export { validateTrackFile, isTrackFile } from './track-file'
 export { check, isFiniteNumber, inRange, isNonEmptyString, isBoolean, isOneOf } from './validate'
 export type { ValidationErrors } from './validate'

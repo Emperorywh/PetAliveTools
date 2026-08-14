@@ -1,10 +1,7 @@
 /**
- * 宠物窗口管理 (transparent, frameless, always-on-top)
+ * 宠物窗口与普通工具窗口管理。
  *
- * 创建透明置顶无框窗口（§6.1），默认 click-through，
- * 并提供切换为可交互模式的 toggle 机制（§6.1）。
- *
- * 运行于主进程。
+ * 已删除抠像预览和行走校正工具窗口；主窗口只直接播放导入片段。
  */
 
 import { BrowserWindow } from 'electron'
@@ -18,7 +15,7 @@ const WINDOW_HEIGHT = 400
  * 创建宠物主窗口。
  *
  * 窗口属性（§6.1）：
- * - transparent: true     透明背景，承载带 alpha 的 WebM
+ * - transparent: true     透明背景，承载用户直接导入的视频
  * - frame: false          无边框无标题栏
  * - alwaysOnTop: true     始终置顶（§10 决策）
  * - resizable: false      固定尺寸
@@ -75,49 +72,6 @@ export function setInteractive(win: BrowserWindow, interactive: boolean): void {
   }
 }
 
-/**
- * 创建色键抠像预览工具窗口（§5.5 手动验证入口）。
- *
- * 与宠物窗口不同：普通带边框窗口、不透明、可交互，承载
- * #chroma-preview 渲染视图（控件面板 + 抠像预览 + 边缘放大）。
- * 由主进程在 PETALIVE_VIEW=chroma-preview 时创建。
- */
-export function createChromaPreviewWindow(): BrowserWindow {
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    title: '色键抠像预览（PetAliveTools）',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: true
-    }
-  })
-
-  loadToolView(win, 'chroma-preview')
-  return win
-}
-
-/**
- * 创建行走跟踪裁切 + 位移曲线校正工具窗口（§5.3 手动验证入口）。
- *
- * 承载 #walk-correction 渲染视图（跟踪裁切片段回放 + 位移曲线
- * 手动校正 + 行走子段标注）。由主进程在 PETALIVE_VIEW=walk-correction 时创建。
- */
-export function createWalkCorrectionWindow(): BrowserWindow {
-  const win = new BrowserWindow({
-    width: 980,
-    height: 900,
-    title: '行走跟踪与位移曲线校正（PetAliveTools）',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: true
-    }
-  })
-
-  loadToolView(win, 'walk-correction')
-  return win
-}
-
 /** 按视图名加载工具窗口 URL（dev server 或生产构建文件） */
 function loadToolView(win: BrowserWindow, view: string): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -128,11 +82,9 @@ function loadToolView(win: BrowserWindow, view: string): void {
 }
 
 /**
- * 创建清单引导式导入向导窗口（§5.5）。
+ * 创建原样片段导入窗口。
  *
- * 承载 #import-wizard 渲染视图：清单展示 + 分步导入流程（选视频→
- * 背景参考色→抠像预览→裁剪/标 loop→行走跟踪校正→填标签→转码入库）。
- * 由主进程在 PETALIVE_VIEW=import-wizard 时创建。
+ * 窗口只展示动作清单和文件选择按钮，不加载视频预览或处理参数。
  */
 export function createImportWizardWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -140,7 +92,7 @@ export function createImportWizardWindow(): BrowserWindow {
     height: 860,
     minWidth: 960,
     minHeight: 680,
-    title: '清单引导式导入（PetAliveTools）',
+    title: '直接导入视频片段（PetAliveTools）',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,

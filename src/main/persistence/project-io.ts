@@ -1,31 +1,19 @@
 /**
- * Pet 项目目录 I/O (§12.1)
+ * Pet 项目目录 I/O。
  *
- * 负责：创建、读取、写入、验证 pet 项目目录。
- * 运行于主进程。
- *
- * 项目目录结构：
- * ```
- * <pet_name>/
- *   persona.json
- *   needs-state.json
- *   behavior-config.json
- *   clips/           *.webm + *.track.json
- *   clips.meta.json
- *   audio/
- *   audio.meta.json
- * ```
+ * clips/ 中的视频是唯一片段来源：加载时直接扫描文件名并构造内存描述，
+ * 不再读取或写入 clips.meta.json，也不会探测或处理视频内容。
  */
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 
 import type { ProjectData, Persona, NeedsState, BehaviorConfig, ClipMeta, AudioMeta } from '../../shared/types/project'
+import { clipFromFileName } from '../../shared/direct-media'
 import {
   validatePersona,
   validateNeedsState,
   validateBehaviorConfig,
-  validateClipMetaArray,
   validateAudioMetaArray,
   defaultPersonality,
   defaultNeedsState,
@@ -38,7 +26,6 @@ import type { ValidationErrors } from '../../shared/schemas'
 const FILE_PERSONA = 'persona.json'
 const FILE_NEEDS_STATE = 'needs-state.json'
 const FILE_BEHAVIOR_CONFIG = 'behavior-config.json'
-const FILE_CLIPS_META = 'clips.meta.json'
 const FILE_AUDIO_META = 'audio.meta.json'
 const DIR_CLIPS = 'clips'
 const DIR_AUDIO = 'audio'
@@ -52,7 +39,6 @@ export interface ProjectPaths {
   readonly needsState: string
   readonly behaviorConfig: string
   readonly clipsDir: string
-  readonly clipsMeta: string
   readonly audioDir: string
   readonly audioMeta: string
 }
@@ -65,7 +51,6 @@ export function getProjectPaths(projectDir: string): ProjectPaths {
     needsState: path.join(projectDir, FILE_NEEDS_STATE),
     behaviorConfig: path.join(projectDir, FILE_BEHAVIOR_CONFIG),
     clipsDir: path.join(projectDir, DIR_CLIPS),
-    clipsMeta: path.join(projectDir, FILE_CLIPS_META),
     audioDir: path.join(projectDir, DIR_AUDIO),
     audioMeta: path.join(projectDir, FILE_AUDIO_META),
   }
@@ -88,7 +73,7 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
 /**
  * 创建新的 pet 项目目录 (§12.1)。
  *
- * 创建完整目录结构与所有 JSON 文件（含空的 clips/audio 元数据数组）。
+ * 创建完整目录结构与配置文件；视频片段只存放在 clips/ 目录。
  * 如果目录已存在则抛出错误。
  *
  * @param projectDir 项目根目录路径
@@ -117,7 +102,6 @@ export async function createProject(
   await writeJson(paths.persona, persona)
   await writeJson(paths.needsState, defaultNeedsState())
   await writeJson(paths.behaviorConfig, defaultBehaviorConfig())
-  await writeJson(paths.clipsMeta, [])
   await writeJson(paths.audioMeta, [])
 
   return paths
@@ -136,11 +120,11 @@ export async function createProject(
 export async function loadProject(projectDir: string): Promise<ProjectData> {
   const paths = getProjectPaths(projectDir)
 
-  const [personaRaw, needsStateRaw, behaviorConfigRaw, clipsRaw, audioRaw] = await Promise.all([
+  const [personaRaw, needsStateRaw, behaviorConfigRaw, clips, audioRaw] = await Promise.all([
     readJson(paths.persona),
     readJson(paths.needsState),
     readJson(paths.behaviorConfig),
-    readJson(paths.clipsMeta),
+    loadDirectClips(paths.clipsDir),
     readJson(paths.audioMeta),
   ])
 
@@ -149,7 +133,6 @@ export async function loadProject(projectDir: string): Promise<ProjectData> {
   errors.push(...validatePersona(personaRaw))
   errors.push(...validateNeedsState(needsStateRaw))
   errors.push(...validateBehaviorConfig(behaviorConfigRaw))
-  errors.push(...validateClipMetaArray(clipsRaw))
   errors.push(...validateAudioMetaArray(audioRaw))
 
   if (errors.length > 0) {
@@ -160,9 +143,28 @@ export async function loadProject(projectDir: string): Promise<ProjectData> {
     persona: personaRaw as Persona,
     needsState: needsStateRaw as NeedsState,
     behaviorConfig: behaviorConfigRaw as BehaviorConfig,
-    clips: clipsRaw as ClipMeta[],
+    clips,
     audio: audioRaw as AudioMeta[],
   }
+}
+
+/**
+ * 直接扫描 clips/ 并按文件名构造片段描述。
+ * 文件内容不会被打开；无法识别或浏览器不支持的文件会被忽略。
+ */
+export async function loadDirectClips(clipsDir: string): Promise<ClipMeta[]> {
+  let entries: string[]
+  try {
+    entries = await fs.readdir(clipsDir)
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw err
+  }
+
+  return entries
+    .sort((a, b) => a.localeCompare(b))
+    .map((fileName) => clipFromFileName(fileName))
+    .filter((clip): clip is ClipMeta => clip !== null)
 }
 
 // ── 写入 ── //
@@ -184,7 +186,6 @@ export async function saveProject(
   errors.push(...validatePersona(data.persona))
   errors.push(...validateNeedsState(data.needsState))
   errors.push(...validateBehaviorConfig(data.behaviorConfig))
-  errors.push(...validateClipMetaArray(data.clips))
   errors.push(...validateAudioMetaArray(data.audio))
 
   if (errors.length > 0) {
@@ -200,7 +201,6 @@ export async function saveProject(
   await writeJson(paths.persona, data.persona)
   await writeJson(paths.needsState, data.needsState)
   await writeJson(paths.behaviorConfig, data.behaviorConfig)
-  await writeJson(paths.clipsMeta, data.clips)
   await writeJson(paths.audioMeta, data.audio)
 }
 
@@ -224,7 +224,6 @@ export async function validateProject(projectDir: string): Promise<ValidationErr
     [FILE_PERSONA, paths.persona, validatePersona],
     [FILE_NEEDS_STATE, paths.needsState, validateNeedsState],
     [FILE_BEHAVIOR_CONFIG, paths.behaviorConfig, validateBehaviorConfig],
-    [FILE_CLIPS_META, paths.clipsMeta, validateClipMetaArray],
     [FILE_AUDIO_META, paths.audioMeta, validateAudioMetaArray],
   ]
 
@@ -260,7 +259,6 @@ export async function validateProject(projectDir: string): Promise<ValidationErr
 export function createDefaultPersona(name: string): Persona {
   return {
     name,
-    symmetrical: true,
     personality: defaultPersonality(),
   }
 }

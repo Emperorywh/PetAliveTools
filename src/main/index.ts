@@ -9,12 +9,9 @@
 
 import { app, BrowserWindow, ipcMain, dialog, type Tray } from 'electron'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { promises as fs } from 'node:fs'
 import {
   createPetWindow,
-  createChromaPreviewWindow,
-  createWalkCorrectionWindow,
   createImportWizardWindow,
   createSettingsWindow,
   setInteractive,
@@ -31,7 +28,9 @@ import {
   type TrayMenuCallbacks,
 } from './shell'
 import { ScreenManager } from './screen'
-import { registerImportIpcHandlers } from './pipeline/ipc-handlers'
+import { registerDirectImportIpcHandlers } from './direct-import-handlers'
+import { registerMediaScheme, handleMediaProtocol } from './media-protocol'
+import { localPathToMediaUrl } from '../shared/media-url'
 import { MouseHandler } from './input/mouse-handler'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
 import {
@@ -48,7 +47,6 @@ import type { BehaviorConfig, ShellSettings } from '../shared/types/behavior-con
 import type { Personality } from '../shared/types/persona'
 import type { NeedsState } from '../shared/types/needs-state'
 import type { ClipMeta } from '../shared/types/clip-meta'
-import type { TrackFile } from '../shared/types/track-file'
 import type { ProjectData } from '../shared/types/project'
 import { applyNeedDelta, advanceNeeds, DEFAULT_NEED_RATES, needWeightModifiers, INTERACTION_NEED_DELTAS, type NeedRates } from './behavior/needs'
 import {
@@ -60,7 +58,6 @@ import { advanceOffline, computeOfflineSec } from './behavior/offline-progressio
 import { BehaviorFsm } from './behavior/fsm'
 import { createSeededRandom } from './behavior/transitions'
 import { selectClipForState } from './behavior/state-lookup'
-import { trackFileName, readTrackFile } from './pipeline/track-file'
 import {
   ClipScheduler,
   type ClipSchedulerConfig,
@@ -106,7 +103,6 @@ let scheduler: ClipScheduler | null = null
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 let commandDispatcher: SchedulerCommandDispatcher | null = null
 let projectClips: readonly ClipMeta[] = []
-let projectTracks: ReadonlyMap<string, TrackFile> = new Map()
 let needRates: NeedRates = DEFAULT_NEED_RATES
 let loopStartMs = 0
 let lastTickMs = 0
@@ -118,18 +114,10 @@ let lastWeightRefreshMs = 0
 /**
  * 引导全部外壳组件。在 app ready 后调用。
  *
- * PETALIVE_VIEW=chroma-preview / walk-correction 时不启动宠物运行时，
- * 仅创建对应的入库管线工具窗口。
+ * PETALIVE_VIEW=import-wizard 时只创建原样片段导入窗口。
+ * 已不存在任何视频处理工具视图。
  */
 async function bootstrap(): Promise<void> {
-  if (process.env['PETALIVE_VIEW'] === 'chroma-preview') {
-    createChromaPreviewWindow()
-    return
-  }
-  if (process.env['PETALIVE_VIEW'] === 'walk-correction') {
-    createWalkCorrectionWindow()
-    return
-  }
   if (process.env['PETALIVE_VIEW'] === 'import-wizard') {
     createImportWizardWindow()
     return
@@ -180,9 +168,10 @@ async function bootstrap(): Promise<void> {
     (cmd: AudioPlayCommand) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         if (cmd.kind === 'play') {
-          // 将文件名解析为项目 audio/ 目录的 file:// URL
+          // 将文件名解析为项目 audio/ 目录的 petmedia:// URL
+          // （dev http 源无法加载 file://，统一走特权媒体协议）
           const audioFile = activeProfile
-            ? pathToFileURL(join(activeProfile.dir, 'audio', cmd.file)).href
+            ? localPathToMediaUrl(join(activeProfile.dir, 'audio', cmd.file))
             : cmd.file
           mainWindow.webContents.send('audio:play', audioFile, cmd.volume)
         } else if (cmd.kind === 'embedded_start') {
@@ -206,9 +195,17 @@ async function bootstrap(): Promise<void> {
     onEmbeddedAudioEnded: () => audioCoordinator?.onEmbeddedAudioEnded(),
   })
 
-  // 4.6 行走媒体时间上报 (IR-004)：渲染端 video.currentTime → 调度器视频时钟
-  ipcMain.on('scheduler:video-time', (_e, clipId: string, timeSec: number) => {
-    scheduler?.updateMediaTime(clipId, timeSec, Date.now())
+  /**
+   * 非循环视频自然结束时推进播放队列。
+   * 只使用 ended 事件，不读取 currentTime 或计算窗口位移。
+   */
+  ipcMain.on('scheduler:clip-ended', (_event, clipId: string) => {
+    const current = scheduler?.snapshot.cycle
+    if (!scheduler || !current || current.queue.completed) return
+    const activeItem = current.queue.items[current.queue.currentIndex]
+    if (activeItem?.kind !== 'play' || activeItem.clip?.id !== clipId) return
+    const result = scheduler.completeCurrentPlayback(Date.now())
+    processSchedulerCommands(result.commands)
   })
 
   // 5. 系统托盘（§10、§12.2、§12.4）
@@ -406,25 +403,6 @@ function mergeWeightOverrides(
 }
 
 /**
- * 构造片段时长解析器 (§5.4 loopOutSec / track frameCount)。
- */
-function makeClipDurationResolver(
-  clips: readonly ClipMeta[],
-  tracks: ReadonlyMap<string, TrackFile>,
-): (clipId: string) => number {
-  return (clipId: string): number => {
-    const clip = clips.find((c) => c.id === clipId)
-    if (!clip) return 3
-    if (clip.loop && clip.loopOutSec != null && clip.loopInSec != null) {
-      return clip.loopOutSec - clip.loopInSec
-    }
-    const track = tracks.get(clipId)
-    if (track) return track.frameCount / track.fps
-    return 3
-  }
-}
-
-/**
  * 初始化调度器 (§9)：
  * 加载项目素材 → 离线推进需求 → 构建 FSM + scheduler → 启动 tick 循环。
  *
@@ -448,7 +426,8 @@ async function initScheduler(): Promise<void> {
 /**
  * 用加载的项目数据重建调度器 (§9)。
  *
- * 加载 track 文件 → 应用离线推进 → 合并权重倍率 → 创建 FSM + scheduler → 注入 mouseHandler。
+ * 应用离线推进 → 合并权重倍率 → 创建 FSM + scheduler → 注入 mouseHandler。
+ * 片段已经由 loadProject 直接从 clips/ 扫描，不加载轨迹或媒体元数据。
  * 调度器替换后，tick 循环在下一个 interval 自动使用新实例。
  */
 async function rebuildScheduler(data: ProjectData): Promise<void> {
@@ -458,20 +437,6 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
 
   // 注入音频素材库 (§11.1)：在 bootstrap 与 profile 切换时把 loadProject 得到的 AudioMeta[] 注入协调器
   audioCoordinator?.setLibrary(data.audio)
-
-  // 加载行走片段位移曲线 (§5.3)
-  const clipsDir = join(activeProfile!.dir, 'clips')
-  const tracksMap = new Map<string, TrackFile>()
-  for (const clip of projectClips) {
-    if (clip.track) {
-      try {
-        tracksMap.set(clip.id, await readTrackFile(clipsDir, trackFileName(clip.id)))
-      } catch {
-        /* 缺失 track 文件可忽略，行走片段会被占位兜底 */
-      }
-    }
-  }
-  projectTracks = tracksMap
 
   // 离线推进 (§9.4)：用 needs-state.json 的 mtime 计算离线时长
   const personality = data.persona.personality
@@ -511,12 +476,9 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
   const fsmConfig = { ...data.behaviorConfig, weightOverrides }
   const fsm = new BehaviorFsm({ config: fsmConfig, rng: createSeededRandom(Date.now()) })
 
-  const bounds = displayManager.getBounds()
   const deps: ClipSchedulerDeps = {
     fsm,
     clips: projectClips,
-    tracks: projectTracks,
-    getClipDurationSec: makeClipDurationResolver(projectClips, projectTracks),
   }
 
   // §9.5 稀有动作候选 (IR-006)：招牌片段 (§4.4 C) 的状态集合
@@ -525,11 +487,6 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
   ]
 
   const config: ClipSchedulerConfig = {
-    symmetrical: data.persona.symmetrical,
-    workArea: bounds,
-    windowWidth: WINDOW_WIDTH,
-    spriteBaseY: SPRITE_BASE_Y,
-    displayedWidthPx: 200,
     idleConfig: {
       idleIntervalMs: 8_000,
       activeIntervalMs: 3_000,
@@ -542,7 +499,6 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
     microRandom: data.behaviorConfig.microRandom,
     personality,
     rareActions,
-    positionJitterPx: 8,
   }
 
   scheduler = new ClipScheduler(deps, config)
@@ -611,10 +567,11 @@ function startSchedulerTick(): void {
  * 将调度器渲染命令分发到窗口/渲染进程 (§9 scheduler → renderer)。
  *
  * 统一委托给 SchedulerCommandDispatcher（IR-001：tick 循环与交互抢占共用）：
- * - play/fade_in/fade_out/easing → 结构化载荷 IPC (IR-002/IR-003)
- * - update_position → 窗口平移 (§7.2)
- * - idle → 锚定片段保活重播（节流, IR-014）
- * - play 携带真实片段触发动作声 (§11.1, IR-009)
+ * - play/fade_in/fade_out/easing → 最小播放载荷 IPC
+ * - idle → 锚定片段保活重播
+ * - play 携带真实片段触发动作声
+ *
+ * 本链路不会产生窗口位置命令或视频处理参数。
  */
 function processSchedulerCommands(commands: readonly RenderCommand[]): void {
   commandDispatcher?.dispatch(commands)
@@ -839,12 +796,19 @@ function registerSettingsIpc(): void {
   })
 }
 
+// 特权媒体协议声明须在 app ready 前完成
+registerMediaScheme()
+
 app.whenReady().then(() => {
-  // 注册导入向导 IPC 处理器 (§5.5)
-  // 当导入目标为活跃 profile 目录时触发调度器重建 (§5.5 → §9)；
-  // 向导默认加载活跃宠物目录 (§12.2)
-  registerImportIpcHandlers({
-    onClipSaved: (projectDir) => {
+  // 本地媒体 petmedia:// → 文件映射（导入向导/宠物窗口的 <video>/<audio>）
+  handleMediaProtocol()
+
+  /**
+   * 注册原样片段复制入口。
+   * 活跃项目复制完成后只重新扫描 clips/，不会启动媒体处理任务。
+   */
+  registerDirectImportIpcHandlers({
+    onClipImported: (projectDir) => {
       if (activeProfile && projectDir === activeProfile.dir) {
         void initScheduler()
       }

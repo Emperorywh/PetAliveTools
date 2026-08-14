@@ -8,24 +8,21 @@ import {
   isPlaceholderClip,
 } from '../../src/main/persistence/placeholder'
 import type { ClipMeta } from '../../src/shared/types/clip-meta'
-import { validateClipMeta } from '../../src/shared/schemas'
 
 function testClip(state: string, id: string): ClipMeta {
   return {
     id,
+    fileName: `${id}.webm`,
     state,
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
     loop: false,
-    loopInSec: null,
-    loopOutSec: null,
     signature: false,
     variant: 1,
     prop: false,
     embeddedAudio: false,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
   }
 }
@@ -40,9 +37,9 @@ describe('createPlaceholderClip', () => {
     expect(clip.category).toBe('basic')
   })
 
-  it('produces a structurally valid ClipMeta', () => {
+  it('does not point to a generated media file', () => {
     const clip = createPlaceholderClip()
-    expect(validateClipMeta(clip)).toHaveLength(0)
+    expect(clip.fileName).toBe('')
   })
 
   it('has a full hitbox [x, y, w, h]', () => {

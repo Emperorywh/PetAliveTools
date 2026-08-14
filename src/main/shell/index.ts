@@ -21,8 +21,6 @@ export {
   enumerateAllDisplays,
   toDisplayInfo,
   resolveSelectedDisplay,
-  computeDpiAwareScale,
-  minVideoResolutionForDpi,
 } from './display-manager'
 export type {
   DisplayInfo,

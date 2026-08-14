@@ -10,6 +10,8 @@
  * 运行于渲染进程。
  */
 
+import { isAbsoluteUrl } from '../../shared/media-url'
+
 /** 音频播放器配置 */
 export interface AudioPlayerConfig {
   /** 音频文件基路径（项目 audio/ 目录的 URL） */
@@ -53,8 +55,8 @@ export class AudioPlayer {
     if (this.muted) return
 
     const audio = this.acquireElement()
-    // 主进程下发 file:// 绝对 URL 时直接使用；否则相对于 audioBaseUrl 解析
-    audio.src = file.startsWith('file://') ? file : `${this.audioBaseUrl}/${file}`
+    // 主进程下发绝对 URL（petmedia:// 等）时直接使用；否则相对于 audioBaseUrl 解析
+    audio.src = isAbsoluteUrl(file) ? file : `${this.audioBaseUrl}/${file}`
     this.gains.set(audio, volumeGain)
     audio.volume = Math.min(1, this.volume * volumeGain)
 

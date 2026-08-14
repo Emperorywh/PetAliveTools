@@ -39,18 +39,16 @@ import type { PlayClipPayload } from '../../src/shared/types/play-command'
 
 function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): ClipMeta {
   return {
+    fileName: `${overrides.id}.webm`,
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
     loop: false,
-    loopInSec: null,
-    loopOutSec: null,
     signature: false,
     variant: 1,
     prop: false,
     embeddedAudio: false,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
     ...overrides,
   }
@@ -71,15 +69,8 @@ function makeScheduler(clips: ClipMeta[]): ClipScheduler {
   const deps: ClipSchedulerDeps = {
     fsm: new BehaviorFsm({ rng: createSeededRandom(42) }),
     clips,
-    tracks: new Map(),
-    getClipDurationSec: () => 2,
   }
   const config: ClipSchedulerConfig = {
-    symmetrical: true,
-    workArea: { x: 0, y: 0, width: 1920, height: 1040, groundLine: 1040 },
-    windowWidth: 400,
-    spriteBaseY: 380,
-    displayedWidthPx: 200,
     idleConfig: {
       idleIntervalMs: 8_000,
       activeIntervalMs: 3_000,
@@ -93,8 +84,8 @@ function makeScheduler(clips: ClipMeta[]): ClipScheduler {
 }
 
 const CLIPS: ClipMeta[] = [
-  clip({ id: 'idle_sit_01', state: 'idle_sit', loop: true, loopInSec: 0, loopOutSec: 3 }),
-  clip({ id: 'petted_01', state: 'petted', category: 'interactive', loop: true, loopInSec: 0, loopOutSec: 2 }),
+  clip({ id: 'idle_sit_01', state: 'idle_sit', loop: true }),
+  clip({ id: 'petted_01', state: 'petted', category: 'interactive', loop: true }),
   clip({ id: 'clicked_01', state: 'clicked', category: 'interactive' }),
   clip({ id: 'eat_01', state: 'eat', category: 'interactive', prop: true }),
 ]

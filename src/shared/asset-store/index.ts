@@ -1,10 +1,7 @@
 /**
- * 资产库模块 (asset-store)
+ * 共享资产类型入口。
  *
- * 负责：片段元数据管理 (clips.meta.json)、音频素材管理、清单进度跟踪、缺素材占位兜底。
- * 参见 SPEC §5.4 (打标 schema) 与 §12.1 (项目格式)。
- *
- * 跨进程共享模块。
+ * 视频片段由 clips/ 直接扫描；这里只保留运行时类型和非视频配置验证。
  */
 
 // 类型定义
@@ -30,8 +27,6 @@ export {
   validatePersona,
   validateNeedsState,
   validateBehaviorConfig,
-  validateClipMeta,
-  validateClipMetaArray,
   validateAudioMeta,
   validateAudioMetaArray,
 } from '../schemas'

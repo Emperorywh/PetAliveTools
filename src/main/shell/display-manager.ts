@@ -4,8 +4,8 @@
  * 职责：
  *   - 枚举所有显示器（含 scaleFactor）
  *   - 选择目标显示器（默认主显示器）
- *   - DPI 感知尺度计算（高 DPI 下归一化渲染保证清晰，§6.4）
- *   - 监听热插拔 / 分辨率变化 / 任务栏移动，重算 workArea / 地面线 / 尺度
+ *   - 读取系统 DPI 信息供设置界面展示
+ *   - 监听热插拔 / 分辨率变化 / 任务栏移动，重算 workArea / 地面线
  *   - 宠物回到可见区域（§13）
  *
  * 运行于主进程。
@@ -16,8 +16,6 @@ import {
   computeGroundLine,
   clampWindowX,
   groundedWindowY,
-  computeNormalizedScale,
-  SHOULDER_HEIGHT_FACTOR,
   type WorkAreaBounds,
   type Rect,
 } from '../../shared/spatial'
@@ -94,55 +92,6 @@ export function resolveSelectedDisplay(
   // 回退到主显示器
   const primary = displays.find((d) => d.isPrimary) ?? displays[0]
   return { display: primary, switched: displayId !== null }
-}
-
-/**
- * 计算 DPI 感知的渲染尺度 (§6.4)。
- *
- * 高 DPI 显示器上 workArea.height 为 DIP（CSS 像素）；
- * 物理像素 = DIP × scaleFactor。归一化尺度基于 DIP 计算
- * （窗口定位用 DIP），但视频分辨率需 ≥ 物理像素才能保证清晰。
- *
- * @returns CSS transform scale 值
- */
-export function computeDpiAwareScale(params: {
-  /** 工作区高度 (DIP / CSS 像素) */
-  readonly workAreaHeightDip: number
-  /** 显示器缩放因子 */
-  readonly scaleFactor: number
-  /** 目标肩高占屏幕高度比例 (0–1) */
-  readonly screenPercent: number
-  /** 片段固有像素高度 */
-  readonly clipHeightPx: number
-  /** 片段相对基准的缩放系数 */
-  readonly scaleHint: number
-}): number {
-  const { workAreaHeightDip, scaleFactor, screenPercent, clipHeightPx, scaleHint } = params
-  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
-    throw new Error(`invalid scaleFactor: ${scaleFactor}`)
-  }
-  // 归一化尺度基于 DIP 高度（窗口定位使用 DIP）
-  // scaleFactor 仅影响视频需要的最低编码分辨率（由转码管线保证）
-  // 此处返回的 scale 直接用于 CSS transform
-  return computeNormalizedScale({
-    screenHeightPx: workAreaHeightDip,
-    screenPercent,
-    clipHeightPx,
-    scaleHint,
-  })
-}
-
-/**
- * 计算高 DPI 显示器所需的最低视频分辨率高度（像素）。
- *
- * 用于判断视频分辨率是否足以在高 DPI 下保持清晰（§6.4）。
- * 转码管线据此选择分辨率档位。
- */
-export function minVideoResolutionForDpi(
-  workAreaHeightDip: number,
-  scaleFactor: number,
-): number {
-  return Math.ceil(workAreaHeightDip * scaleFactor)
 }
 
 /**
@@ -292,6 +241,3 @@ export class DisplayManager {
     this.notifyListeners(this.buildEvent(false))
   }
 }
-
-/** 重新导出 spatial 常量供调用方使用 */
-export { SHOULDER_HEIGHT_FACTOR }

@@ -1,7 +1,7 @@
 /**
  * 宠物性格与身份 (Persona)
  *
- * 参见 SPEC §9.6 (性格 5 维参数化)、§4.3 (对称性为宠物级属性)、§12.1 (persona.json)。
+ * 参见 SPEC 的性格参数与项目配置章节。
  *
  * 跨进程共享类型。
  */
@@ -21,15 +21,13 @@ export interface Personality {
 }
 
 /**
- * 宠物级属性 (§12.1 persona.json)
+ * 宠物级身份与性格。
  *
- * symmetrical 为宠物级属性 (§4.3)，记录在此处而非片段元数据中。
+ * 不再保存“可镜像”属性，因为运行时不会镜像任何导入片段。
  */
 export interface Persona {
   /** 宠物名字 */
   readonly name: string
-  /** 花纹是否对称 (§4.3)：true 允许运行时镜像生成反方向 */
-  readonly symmetrical: boolean
   /** 性格 5 维 (§9.6) */
   readonly personality: Personality
 }

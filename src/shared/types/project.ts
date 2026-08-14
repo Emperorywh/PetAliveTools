@@ -1,9 +1,7 @@
 /**
- * 项目数据聚合类型 (ProjectData)
+ * 项目运行时聚合数据。
  *
- * 参见 SPEC §12.1 (项目格式)。
- *
- * 一个 pet 项目目录的全部结构化数据。跨进程共享类型。
+ * clips 由项目目录实时扫描得到，不对应 clips.meta.json 持久化文件。
  */
 
 import type { Persona } from './persona'
@@ -20,7 +18,7 @@ export interface ProjectData {
   readonly needsState: NeedsState
   /** behavior-config.json — FSM 权重覆盖 / 节律设置 */
   readonly behaviorConfig: BehaviorConfig
-  /** clips.meta.json — 片段元数据数组 (§5.4) */
+  /** clips/ 扫描得到的直接播放片段 */
   readonly clips: readonly ClipMeta[]
   /** audio.meta.json — 音频素材元数据数组 */
   readonly audio: readonly AudioMeta[]

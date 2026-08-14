@@ -1,9 +1,11 @@
 /**
- * Persona 验证 (§12.1 persona.json, §9.6, §4.3)
+ * Persona 验证。
+ *
+ * 只验证身份与性格，不再接受或要求视频镜像配置。
  */
 
 import type { Persona } from '../types/persona'
-import { check, inRange, isNonEmptyString, isBoolean } from './validate'
+import { check, inRange, isNonEmptyString } from './validate'
 import type { ValidationErrors } from './validate'
 
 const PERSONALITY_DIMS = ['liveliness', 'laziness', 'clinginess', 'timidity', 'curiosity'] as const
@@ -17,8 +19,6 @@ export function validatePersona(data: unknown): ValidationErrors {
   const obj = data as Record<string, unknown>
 
   check(isNonEmptyString(obj['name']), errors, 'persona.name: expected a non-empty string')
-
-  check(isBoolean(obj['symmetrical']), errors, 'persona.symmetrical: expected a boolean (§4.3)')
 
   const personality = obj['personality']
   if (typeof personality !== 'object' || personality === null) {

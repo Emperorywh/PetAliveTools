@@ -64,11 +64,6 @@ export function validateBehaviorConfig(data: unknown): ValidationErrors {
   } else {
     const m = mr as Record<string, unknown>
     check(
-      inRange(m['rateJitter'], 0, 1),
-      errors,
-      'behavior-config.microRandom.rateJitter: expected a number in [0, 1]',
-    )
-    check(
       isFiniteNumber(m['idleJitterSec']) && (m['idleJitterSec'] as number) >= 0,
       errors,
       'behavior-config.microRandom.idleJitterSec: expected a non-negative number',
@@ -100,11 +95,6 @@ export function validateShellSettings(data: unknown): ValidationErrors {
   }
 
   check(
-    inRange(s['screenPercent'], 0.01, 0.99),
-    errors,
-    'behavior-config.shell.screenPercent: expected a number in (0, 1) (§7.4)',
-  )
-  check(
     inRange(s['volume'], 0, 1),
     errors,
     'behavior-config.shell.volume: expected a number in [0, 1] (§11.2)',
@@ -132,7 +122,6 @@ export function validateShellSettings(data: unknown): ValidationErrors {
 export function defaultShellSettings(): ShellSettings {
   return {
     displayId: null,
-    screenPercent: 0.15,
     volume: 0.25,
     ambientFrequency: 1.0,
     autoLaunch: true,
@@ -150,7 +139,6 @@ export function defaultBehaviorConfig() {
       nightSleepBoost: 3.0,
     },
     microRandom: {
-      rateJitter: 0.05,
       idleJitterSec: 2,
       signatureProbability: 0.05,
     },

@@ -8,10 +8,9 @@ function behaviorConfig(weightOverrides: Record<string, Record<string, number>>)
   return {
     weightOverrides,
     rhythm: { nightStartHour: 22, nightEndHour: 7, nightSleepBoost: 3.0 },
-    microRandom: { rateJitter: 0.05, idleJitterSec: 2, signatureProbability: 0.05 },
+    microRandom: { idleJitterSec: 2, signatureProbability: 0.05 },
     shell: {
       displayId: null,
-      screenPercent: 0.15,
       volume: 0.25,
       ambientFrequency: 1.0,
       autoLaunch: true,

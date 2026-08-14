@@ -1,5 +1,5 @@
 /**
- * 占位片段机制 (§5.5 缺素材兜底, §13 可靠性)
+ * 缺少直接导入片段时的内存占位机制。
  *
  * 缺失关键状态片段时，用通用占位片段（端坐 idle_sit）临时顶替。
  * 同时提供缺失状态检测，供清单标红提醒使用。
@@ -21,19 +21,17 @@ export const PLACEHOLDER_CLIP_ID = '__placeholder_idle_sit__'
 export function createPlaceholderClip(): ClipMeta {
   return {
     id: PLACEHOLDER_CLIP_ID,
+    fileName: '',
     state: 'idle_sit',
     category: 'basic',
     direction: 'none',
     anchor: 'sit',
     loop: true,
-    loopInSec: 0,
-    loopOutSec: 3,
     signature: false,
     variant: 1,
     prop: false,
     embeddedAudio: false,
     audio: null,
-    scaleHint: 1.0,
     hitbox: [0.1, 0.05, 0.8, 0.9],
   }
 }

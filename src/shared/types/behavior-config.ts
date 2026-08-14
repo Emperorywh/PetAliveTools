@@ -16,10 +16,11 @@ export interface RhythmConfig {
   readonly nightSleepBoost: number
 }
 
-/** 调度微随机化参数 (§9.5) */
+/**
+ * 文件选择与停留节奏随机化参数。
+ * 播放速率抖动已删除，原始片段始终以 1.0 倍速播放。
+ */
 export interface MicroRandomConfig {
-  /** 播放速率抖动幅度 (如 0.05 = ±5%) */
-  readonly rateJitter: number
   /** 静止时长抖动 (秒) */
   readonly idleJitterSec: number
   /** 稀有动作触发概率 (如 0.03–0.08) */
@@ -29,14 +30,12 @@ export interface MicroRandomConfig {
 /**
  * 外壳设置 (§12.4 设置面板)
  *
- * 显示器选择、尺度、音量、节律频率、开机自启与快捷键配置。
+ * 显示器选择、音量、节律频率、开机自启与快捷键配置。
  * 存储于 behavior-config.json 的 `shell` 字段。
  */
 export interface ShellSettings {
   /** 选定显示器 ID（null = 主显示器，§6.4） */
   readonly displayId: number | null
-  /** 目标肩高占屏幕高度比例 (§7.4，0–1，默认 0.15) */
-  readonly screenPercent: number
   /** 音频音量 (0–1，§11.2) */
   readonly volume: number
   /** 环境声频率倍率 (§11.1 频率可调，默认 1.0) */

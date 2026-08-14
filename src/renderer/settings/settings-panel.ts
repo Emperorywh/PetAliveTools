@@ -1,7 +1,7 @@
 /**
  * 设置面板 UI (settings panel) — §12.4
  *
- * 提供：显示器选择、尺度、音量、节律频率、性格 5 维滑杆、
+ * 提供：显示器选择、音量、节律频率、性格 5 维滑杆、
  * 开机自启开关、快捷键配置。
  *
  * 通过 IPC 与主进程通信（SettingsBridge），所有设置持久化到
@@ -85,7 +85,6 @@ class SettingsPanelImpl implements SettingsPanel {
 
     root.appendChild(this.createHeader())
     root.appendChild(this.createDisplaySection())
-    root.appendChild(this.createScaleSection())
     root.appendChild(this.createAudioSection())
     root.appendChild(this.createPersonalitySection())
     root.appendChild(this.createShellSection())
@@ -140,34 +139,11 @@ class SettingsPanelImpl implements SettingsPanel {
     const dpiInfo = document.createElement('p')
     dpiInfo.className = 'settings-hint'
     dpiInfo.textContent = selectedDisplay
-      ? `缩放因子 ${selectedDisplay.scaleFactor}× — 高 DPI 下按归一化尺度渲染保证清晰`
+      ? `系统缩放因子 ${selectedDisplay.scaleFactor}×；视频仍按原文件直接播放`
       : ''
 
     section.appendChild(row)
     section.appendChild(dpiInfo)
-    return section
-  }
-
-  // —— 尺度 —— //
-
-  private createScaleSection(): HTMLElement {
-    const section = this.createSection('尺度 (§7.4)')
-
-    const slider = this.createSlider({
-      label: '宠物大小（屏幕高度占比）',
-      min: 5,
-      max: 40,
-      step: 1,
-      value: Math.round(this.shell!.screenPercent * 100),
-      suffix: '%',
-      onChange: async (val) => {
-        this.shell = await window.petalive!.settings!.updateShellSettings({
-          screenPercent: val / 100,
-        })
-      },
-    })
-
-    section.appendChild(slider)
     return section
   }
 

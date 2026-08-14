@@ -1,10 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ClipMeta } from '../shared/types/clip-meta'
-import type { TrackFile } from '../shared/types/track-file'
 import type { AudioMeta } from '../shared/types/audio-meta'
 import type { ProjectData } from '../shared/types/project'
-import type { ImportTranscodeRequest } from '../shared/pipeline/import-flow'
-import type { ImportTranscodeResult } from '../main/pipeline/import-transcoder'
+import type {
+  DirectClipImportRequest,
+  DirectClipImportResult,
+} from '../shared/direct-media'
 import type { ShellSettings } from '../shared/types/behavior-config'
 import type { Personality } from '../shared/types/persona'
 import type {
@@ -45,7 +45,10 @@ export interface AudioBridge {
   onSetMuted(callback: (muted: boolean) => void): void
 }
 
-/** 导入向导 IPC 桥接接口 */
+/**
+ * 原样片段导入桥接。
+ * 渲染进程只能选择和复制文件，不暴露任何视频处理接口。
+ */
 export interface ImportBridge {
   /** 获取默认（活跃宠物）项目目录；无活跃宠物时为 null */
   getDefaultProjectDir(): Promise<string | null>
@@ -55,21 +58,10 @@ export interface ImportBridge {
   createProject(parentDir: string, petName: string): Promise<string>
   /** 加载项目数据 */
   loadProject(projectDir: string): Promise<ProjectData>
-  /** 选择视频文件 */
-  selectVideo(): Promise<string | null>
-  /** 转码（色键 + VP9-alpha；embeddedAudio 片段保留音轨 §4.8） */
-  transcode(
-    request: ImportTranscodeRequest,
-    projectDir: string,
-    presetName?: string,
-    screenHeightPx?: number,
-  ): Promise<ImportTranscodeResult>
-  /** 保存片段元数据 + 可选 track.json */
-  saveClip(
-    projectDir: string,
-    clip: ClipMeta,
-    trackFile?: TrackFile,
-  ): Promise<{ clipId: string; clipsCount: number }>
+  /** 选择已制作完成、可直接播放的视频文件 */
+  selectClip(): Promise<string | null>
+  /** 原样复制片段，不转码、不生成视频元数据 */
+  copyClip(projectDir: string, request: DirectClipImportRequest): Promise<DirectClipImportResult>
   /** 选择音频文件 (§11.1 音频素材入库, IR-013) */
   selectAudio(): Promise<string | null>
   /** 音频素材入库：拷贝至 audio/ 并追加 audio.meta.json (IR-013) */
@@ -77,12 +69,6 @@ export interface ImportBridge {
     projectDir: string,
     meta: AudioMeta,
     sourcePath: string,
-  ): Promise<{ audioId: string; audioCount: number }>
-  /** 从视频抽取音轨入库 (§4.8, IR-010/IR-013 联动) */
-  extractAudio(
-    projectDir: string,
-    sourceVideoPath: string,
-    meta: AudioMeta,
   ): Promise<{ audioId: string; audioCount: number }>
 }
 
@@ -96,8 +82,8 @@ export interface SchedulerBridge {
   onFadeOut(callback: (payload: FadeOutPayload) => void): void
   /** 监听兜底缓动指令 (§8.3, IR-003) */
   onEasing(callback: (payload: EasingPayload) => void): void
-  /** 行走片段媒体时间上报 (IR-004 视频时钟)：渲染 → 主进程 */
-  reportVideoTime(clipId: string, currentTimeSec: number): void
+  /** 当前非循环片段自然播放结束，通知主进程推进队列 */
+  reportClipEnded(clipId: string): void
   /** 监听素材库为空指引（§13 不崩溃，弹引导采集） */
   onShowGuidance(callback: () => void): void
 }
@@ -137,21 +123,12 @@ contextBridge.exposeInMainWorld('petalive', {
       ipcRenderer.invoke('import:createProject', parentDir, petName),
     loadProject: (projectDir: string) =>
       ipcRenderer.invoke('import:loadProject', projectDir),
-    selectVideo: () => ipcRenderer.invoke('import:selectVideo'),
-    transcode: (
-      request: ImportTranscodeRequest,
-      projectDir: string,
-      presetName?: string,
-      screenHeightPx?: number,
-    ) =>
-      ipcRenderer.invoke('import:transcode', request, projectDir, presetName, screenHeightPx),
-    saveClip: (projectDir: string, clip: ClipMeta, trackFile?: TrackFile) =>
-      ipcRenderer.invoke('import:saveClip', projectDir, clip, trackFile),
+    selectClip: () => ipcRenderer.invoke('import:selectClip'),
+    copyClip: (projectDir: string, request: DirectClipImportRequest) =>
+      ipcRenderer.invoke('import:copyClip', projectDir, request),
     selectAudio: () => ipcRenderer.invoke('import:selectAudio'),
     saveAudio: (projectDir: string, meta: AudioMeta, sourcePath: string) =>
       ipcRenderer.invoke('import:saveAudio', projectDir, meta, sourcePath),
-    extractAudio: (projectDir: string, sourceVideoPath: string, meta: AudioMeta) =>
-      ipcRenderer.invoke('import:extractAudio', projectDir, sourceVideoPath, meta),
   } satisfies ImportBridge,
   input: {
     enterInteractive: () => ipcRenderer.send('input:enter-interactive'),
@@ -207,8 +184,8 @@ contextBridge.exposeInMainWorld('petalive', {
       const handler = (_e: unknown, payload: EasingPayload): void => callback(payload)
       ipcRenderer.on('scheduler:easing', handler)
     },
-    reportVideoTime: (clipId: string, currentTimeSec: number) =>
-      ipcRenderer.send('scheduler:video-time', clipId, currentTimeSec),
+    reportClipEnded: (clipId: string) =>
+      ipcRenderer.send('scheduler:clip-ended', clipId),
     onShowGuidance: (callback: () => void) => {
       ipcRenderer.on('scheduler:guidance', () => callback())
     },

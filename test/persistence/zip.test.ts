@@ -16,8 +16,8 @@ describe('createZipArchive / readZipArchive round-trip', () => {
     const binary = crypto.randomBytes(4096)
     const entries: ZipEntry[] = [
       { name: 'persona.json', data: Buffer.from('{"name":"小橘"}', 'utf-8') },
-      { name: 'clips/idle_sit_01.webm', data: binary },
-      { name: 'clips/walk_right_01.track.json', data: Buffer.from('{"offsets":[]}', 'utf-8') },
+      { name: 'clips/idle_sit__none__01.webm', data: binary },
+      { name: 'clips/walk__right__01.mov', data: crypto.randomBytes(768) },
       { name: 'audio/meow_02.wav', data: crypto.randomBytes(512) },
     ]
 

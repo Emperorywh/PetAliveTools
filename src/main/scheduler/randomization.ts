@@ -1,14 +1,12 @@
 /**
- * 调度微随机化 (§9.5)
+ * 文件选择与停留节奏随机化。
  *
  * 反循环感四策之一——微随机：在权重采样上叠加随机扰动。
  *
  * 包含：
- *   1. 播放速率 ±5%，行走位移曲线随速率同步缩放 (§7.2, §9.5)
- *   2. 静止时长抖动 (idle duration jitter)
- *   3. 出现位置 x 抖动 (position x jitter)
- *   4. 片段顺序打乱 / 变体洗牌 (variant shuffling)
- *   5. 稀有动作插入 (rare action insertion at 3–8%)
+ *   1. 静止时长抖动
+ *   2. 片段顺序打乱 / 变体洗牌
+ *   3. 稀有动作插入
  *
  * 变体耗尽兜底 (§9.5) 已在 idle-scheduler.ts 实现，
  * 本模块不重复；本模块专注于随机化参数的生成与钳制。
@@ -19,44 +17,6 @@
 import type { MicroRandomConfig } from '../../shared/types/behavior-config'
 import type { Personality } from '../../shared/types/persona'
 import { personalitySignatureProbability } from '../behavior/personality'
-
-// —— 播放速率抖动 —— //
-
-/**
- * 生成带抖动的播放速率 (§9.5: ±5%)。
- *
- * 在 [1 - rateJitter, 1 + rateJitter] 范围内均匀采样。
- * 行走片段的位移曲线按此速率同步缩放，避免滑步 (§7.2)。
- *
- * @param rateJitter 抖动幅度（如 0.05 = ±5%）
- * @param rng 随机源
- * @returns 播放速率倍率（如 0.97 或 1.04）
- */
-export function jitteredPlaybackRate(
-  rateJitter: number,
-  rng: () => number,
-): number {
-  const delta = (rng() * 2 - 1) * rateJitter // [-rateJitter, +rateJitter]
-  return 1 + delta
-}
-
-/**
- * 将播放速率与行走位移曲线同步缩放。
- *
- * §7.2 要求：窗口平移与画面内步态严格同步。
- * 当播放速率变化时，播放时长 = 片段时长 / rate，
- * 对应的位移采样也需要按 rate 缩放时间轴。
- *
- * @param originalDurationSec 原始片段时长（秒）
- * @param rate 播放速率倍率
- * @returns 实际播放时长（秒）= originalDurationSec / rate
- */
-export function syncedWalkDuration(
-  originalDurationSec: number,
-  rate: number,
-): number {
-  return originalDurationSec / rate
-}
 
 // —— 静止时长抖动 —— //
 
@@ -81,28 +41,6 @@ export function jitteredIdleDuration(
   const result = baseIntervalMs + delta
   // 确保非负且有合理下限
   return Math.max(1000, result)
-}
-
-// —— 位置 x 抖动 —— //
-
-/**
- * 生成带抖动的出现位置 x (§9.5: position x jitter)。
- *
- * 在 [baseX - maxJitterPx, baseX + maxJitterPx] 范围内均匀采样。
- * 用于宠物在锚定态停留时位置的微扰，避免每次完全一致。
- *
- * @param baseX 基础 x 位置
- * @param maxJitterPx 最大抖动像素
- * @param rng 随机源
- * @returns 带抖动的 x 位置
- */
-export function jitteredPositionX(
-  baseX: number,
-  maxJitterPx: number,
-  rng: () => number,
-): number {
-  const delta = (rng() * 2 - 1) * maxJitterPx
-  return baseX + delta
 }
 
 // —— 变体洗牌 —— //
@@ -181,79 +119,4 @@ export function pickRareAction(
 ): string | null {
   if (signatures.length === 0) return null
   return signatures[Math.floor(rng() * signatures.length)]
-}
-
-// —— 随机化参数集合 —— //
-
-/**
- * 一次调度周期所需的随机化参数。
- *
- * 由调度器在规划下一个调度周期时生成。
- */
-export interface RandomizationParams {
-  /** 播放速率倍率 (1 ± rateJitter) */
-  readonly playbackRate: number
-  /** 带抖动的静止间隔 (ms) */
-  readonly idleIntervalMs: number
-  /** 带抖动的出现位置 x */
-  readonly positionX: number
-  /** 是否插入稀有动作 */
-  readonly insertRareAction: boolean
-  /** 选择的稀有动作键（insertRareAction=false 时为 null） */
-  readonly rareAction: string | null
-  /** 使用的稀有动作概率 */
-  readonly rareActionProbability: number
-}
-
-/** 随机化生成选项 */
-export interface RandomizationOptions {
-  /** 微随机配置 */
-  readonly config: MicroRandomConfig
-  /** 性格 5 维（用于稀有动作概率调制） */
-  readonly personality?: Personality
-  /** 基础静止间隔 (ms) */
-  readonly baseIdleIntervalMs: number
-  /** 基础 x 位置 */
-  readonly baseX: number
-  /** 位置 x 抖动最大像素 */
-  readonly positionJitterPx: number
-  /** 候选稀有动作状态键 */
-  readonly rareActions: readonly string[]
-  /** 随机源 */
-  readonly rng: () => number
-}
-
-/**
- * 一次性生成下一个调度周期的全部随机化参数 (§9.5)。
- *
- * 统一入口，确保所有随机参数在一次调用中生成，
- * 调度器只需持有返回的 RandomizationParams。
- */
-export function generateRandomizationParams(
-  opts: RandomizationOptions,
-): RandomizationParams {
-  const { config, rng } = opts
-
-  const playbackRate = jitteredPlaybackRate(config.rateJitter, rng)
-  const idleIntervalMs = jitteredIdleDuration(
-    opts.baseIdleIntervalMs,
-    config.idleJitterSec,
-    rng,
-  )
-  const positionX = jitteredPositionX(opts.baseX, opts.positionJitterPx, rng)
-
-  const rareActionProbability = effectiveRareActionProbability(config, opts.personality)
-  const insertRareAction = shouldInsertRareAction(rareActionProbability, rng)
-  const rareAction = insertRareAction
-    ? pickRareAction(opts.rareActions, rng)
-    : null
-
-  return {
-    playbackRate,
-    idleIntervalMs,
-    positionX,
-    insertRareAction: insertRareAction && rareAction !== null,
-    rareAction,
-    rareActionProbability,
-  }
 }

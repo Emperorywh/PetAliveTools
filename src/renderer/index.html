@@ -15,6 +15,12 @@
         background: transparent;
         overflow: hidden;
       }
+
+      /* 视图挂载点：给定高度使子视图的 height:100% 生效
+         （否则导入向导等内部 overflow-y:auto 面板无受约束高度可滚） */
+      #app {
+        height: 100%;
+      }
     </style>
   </head>
   <body>

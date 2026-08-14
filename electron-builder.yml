@@ -6,13 +6,6 @@ directories:
 files:
   - out/**/*
   - package.json
-# ffmpeg 二进制随包交付 (§3.3, IR-011)：resources/ffmpeg/win-x64/ffmpeg.exe
-# → <安装目录>/resources/ffmpeg/win-x64/ffmpeg.exe（asar 外，可直接 spawn）
-extraResources:
-  - from: resources/ffmpeg
-    to: ffmpeg
-    filter:
-      - '**/*'
 win:
   target:
     - target: nsis
