@@ -17,6 +17,7 @@ import * as path from 'node:path'
 import type { ClipMeta } from '../../shared/types/clip-meta'
 import type { ProjectData } from '../../shared/types/project'
 import type { TrackFile } from '../../shared/types/track-file'
+import type { AudioMeta } from '../../shared/types/audio-meta'
 import type { ImportTranscodeRequest } from '../../shared/pipeline/import-flow'
 import { recommendPreset, type TranscodePresetName } from '../../shared/pipeline/presets'
 import {
@@ -24,9 +25,9 @@ import {
   loadProject,
   saveProject,
 } from '../persistence/project-io'
-import { validateClipMetaArray } from '../../shared/schemas'
+import { validateClipMetaArray, validateAudioMetaArray } from '../../shared/schemas'
 import { writeTrackFile } from './track-file'
-import { transcodeImport, type AppInfo } from './import-transcoder'
+import { transcodeImport, extractAudioTrack, type AppInfo } from './import-transcoder'
 
 /** IPC 通道名 */
 export const IPC = {
@@ -36,6 +37,9 @@ export const IPC = {
   SELECT_VIDEO: 'import:selectVideo',
   TRANSCODE: 'import:transcode',
   SAVE_CLIP: 'import:saveClip',
+  SELECT_AUDIO: 'import:selectAudio',
+  SAVE_AUDIO: 'import:saveAudio',
+  EXTRACT_AUDIO: 'import:extractAudio',
   GET_DEFAULT_PROJECT_DIR: 'import:getDefaultProjectDir',
 } as const
 
@@ -44,6 +48,8 @@ function getAppInfo(): AppInfo {
   return {
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
+    // IR-011：打包环境 extraResources 落地目录（process.resourcesPath）
+    resourcesPath: process.resourcesPath,
     ffmpegPathOverride: process.env['FFMPEG_PATH'] || undefined,
   }
 }
@@ -191,6 +197,82 @@ export function registerImportIpcHandlers(hooks: ImportIpcHooks = {}): void {
       return { clipId: clip.id, clipsCount: updatedClips.length }
     },
   )
+
+  // ── 选择音频文件 (§11.1 音频素材入库, IR-013) ── //
+  ipcMain.handle(IPC.SELECT_AUDIO, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      title: '选择音频文件',
+      filters: [
+        { name: '音频文件', extensions: ['wav', 'mp3', 'ogg', 'webm', 'm4a', 'flac'] },
+        { name: '所有文件', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+    return result.filePaths[0]
+  })
+
+  // ── 音频素材入库：拷贝至 audio/ 并追加 audio.meta.json (IR-013) ── //
+  ipcMain.handle(
+    IPC.SAVE_AUDIO,
+    async (_event, projectDir: string, meta: AudioMeta, sourcePath: string) => {
+      const paths = getProjectPaths(projectDir)
+      await fs.mkdir(paths.audioDir, { recursive: true })
+
+      // 拷贝音频文件到项目 audio/ 目录（目标文件名以 meta.file 为准）
+      const targetPath = path.join(paths.audioDir, meta.file)
+      await fs.copyFile(sourcePath, targetPath)
+
+      await appendAudioMeta(paths.audioMeta, meta)
+
+      // 音频库变化影响运行时（环境声/动作声），与片段保存同等对待
+      hooks.onClipSaved?.(projectDir)
+
+      const count = (JSON.parse(await fs.readFile(paths.audioMeta, 'utf-8')) as unknown[]).length
+      return { audioId: meta.id, audioCount: count }
+    },
+  )
+
+  // ── 从视频抽取音轨入库 (§4.8, IR-010/IR-013 联动) ── //
+  ipcMain.handle(
+    IPC.EXTRACT_AUDIO,
+    async (_event, projectDir: string, sourceVideoPath: string, meta: AudioMeta) => {
+      const paths = getProjectPaths(projectDir)
+      await fs.mkdir(paths.audioDir, { recursive: true })
+
+      const outputPath = path.join(paths.audioDir, meta.file)
+      await extractAudioTrack(getAppInfo(), sourceVideoPath, outputPath)
+
+      await appendAudioMeta(paths.audioMeta, meta)
+
+      hooks.onClipSaved?.(projectDir)
+
+      const count = (JSON.parse(await fs.readFile(paths.audioMeta, 'utf-8')) as unknown[]).length
+      return { audioId: meta.id, audioCount: count }
+    },
+  )
+}
+
+/**
+ * 追加音频元数据到 audio.meta.json（写前 schema 校验，§12.1）。
+ *
+ * @param audioMetaPath audio.meta.json 路径
+ * @param meta 新音频素材元数据
+ * @throws 校验失败（含 id 重复）时抛出
+ */
+export async function appendAudioMeta(audioMetaPath: string, meta: AudioMeta): Promise<void> {
+  const existingRaw = await readJson(audioMetaPath)
+  const existing = (Array.isArray(existingRaw) ? existingRaw : []) as AudioMeta[]
+  const updated = [...existing, meta]
+
+  const errors = validateAudioMetaArray(updated)
+  if (errors.length > 0) {
+    throw new Error(`音频元数据验证失败:\n  ${errors.join('\n  ')}`)
+  }
+
+  await writeJson(audioMetaPath, updated)
 }
 
 /**

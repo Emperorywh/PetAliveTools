@@ -49,6 +49,14 @@ export interface PlaybackItem {
   readonly mirrored?: boolean
   /** 行走映射（仅行走目标片段，§7.2） */
   readonly walk?: WalkWindowMapping
+  /**
+   * 播放速率倍率 (§9.5 微随机, IR-006)。
+   *
+   * 仅目标片段携带；缺省 = 1.0。非循环目标片段的 durationMs
+   * 已按速率折算（durSec / rate，syncedWalkDuration），
+   * 位移采样经媒体时间（IR-004）天然与速率同步。
+   */
+  readonly playbackRate?: number
   /** 在转移计划中的角色（调试用） */
   readonly role?: string
 }
@@ -81,6 +89,7 @@ export function buildPlaybackQueue(
   targetExtra?: {
     readonly mirrored?: boolean
     readonly walk?: WalkWindowMapping
+    readonly playbackRate?: number
   },
 ): readonly PlaybackItem[] {
   const items: PlaybackItem[] = []
@@ -93,15 +102,20 @@ export function buildPlaybackQueue(
 function stepToItem(
   step: TransitionStep,
   getClipDurationSec: (clipId: string) => number,
-  targetExtra?: { readonly mirrored?: boolean; readonly walk?: WalkWindowMapping },
+  targetExtra?: {
+    readonly mirrored?: boolean
+    readonly walk?: WalkWindowMapping
+    readonly playbackRate?: number
+  },
   isTarget?: boolean,
 ): PlaybackItem {
   switch (step.kind) {
     case 'play': {
       const clip = step.clip!
-      // 目标片段可能携带镜像 / 行走映射信息
+      // 目标片段可能携带镜像 / 行走映射 / 播放速率信息
       const mirrored = isTarget ? targetExtra?.mirrored : undefined
       const walk = isTarget ? targetExtra?.walk : undefined
+      const playbackRate = isTarget ? targetExtra?.playbackRate : undefined
       // 循环目标片段由调度器的 idle interval 控制时长，durationMs = null
       // 非目标 play 步骤（过渡片段、锚定片段）按片段时长执行
       if (isTarget && clip.loop) {
@@ -111,16 +125,20 @@ function stepToItem(
           durationMs: null,
           mirrored,
           walk,
+          playbackRate,
           role: step.role,
         }
       }
       const durSec = getClipDurationSec(clip.id)
+      // §9.5 速率抖动：墙钟时长 = 媒体时长 / 速率（syncedWalkDuration，IR-006）
+      const rate = playbackRate !== undefined && playbackRate > 0 ? playbackRate : 1
       return {
         kind: 'play',
         clip,
-        durationMs: Math.round(durSec * 1000),
+        durationMs: Math.round((durSec / rate) * 1000),
         mirrored,
         walk,
+        playbackRate,
         role: step.role,
       }
     }
@@ -137,6 +155,7 @@ function stepToItem(
         clip: step.clip,
         durationMs: step.durationMs!,
         holdPosition: step.holdPosition,
+        playbackRate: isTarget ? targetExtra?.playbackRate : undefined,
         role: step.role,
       }
     case 'fade_out':
@@ -242,6 +261,13 @@ export interface SchedulingCycle {
   readonly isPlaceholder: boolean
   /** 是否使用了 §8.3 兜底 */
   readonly usedFallback: boolean
+  /**
+   * 完成后保持 FSM 状态不变（§9.5 稀有动作插入 / 交互抢占式周期）。
+   *
+   * true 时调度器在周期完成后经 transitionToIdlePreservingFsm 回到
+   * 锚定态，不推进 fsmState——FSM 决策路径不受插入动作影响。
+   */
+  readonly preserveFsm?: boolean
 }
 
 /**
@@ -260,14 +286,22 @@ export function createSchedulingCycle(params: {
     readonly mapping: WalkWindowMapping
     readonly clipDurationSec: number
   }
+  /** 目标片段播放速率倍率 (§9.5, IR-006)；缺省 1.0 */
+  readonly playbackRate?: number
   readonly idleIntervalMs: number
   readonly isPlaceholder: boolean
+  /** 完成后保持 FSM 状态（稀有动作插入，§9.5） */
+  readonly preserveFsm?: boolean
 }): SchedulingCycle {
   const items = buildPlaybackQueue(
     params.plan,
     params.getClipDurationSec,
-    params.walkPlan
-      ? { mirrored: params.walkPlan.mirrored, walk: params.walkPlan.mapping }
+    params.walkPlan || params.playbackRate !== undefined
+      ? {
+          mirrored: params.walkPlan?.mirrored,
+          walk: params.walkPlan?.mapping,
+          playbackRate: params.playbackRate,
+        }
       : undefined,
   )
   const queue = initPlaybackQueue(items, params.nowMs)
@@ -281,5 +315,6 @@ export function createSchedulingCycle(params: {
     idleIntervalMs: params.idleIntervalMs,
     isPlaceholder: params.isPlaceholder,
     usedFallback: params.plan.usedFallback,
+    preserveFsm: params.preserveFsm,
   }
 }

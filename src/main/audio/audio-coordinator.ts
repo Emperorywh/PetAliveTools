@@ -90,7 +90,7 @@ export class AudioCoordinator {
   private library: AudioLibrary
   private config: AudioConfig
   private readonly ambientConfig: AmbientConfig
-  private readonly rhythmConfig: RhythmConfig
+  private rhythmConfig: RhythmConfig
   private readonly rng: () => number
   private readonly now: NowProvider
   private readonly hour: HourProvider
@@ -307,6 +307,17 @@ export class AudioCoordinator {
   /** 设置环境声频率倍率 (§11.1) */
   setAmbientFrequency(freq: number): void {
     this.config = updateAudioConfig(this.config, { ambientFrequency: freq })
+  }
+
+  /**
+   * 更新昼夜节律配置 (§9.3, IR-015)。
+   *
+   * 项目 behavior-config.json 的 rhythm 设置在调度器重建/设置更新时下发，
+   * 使环境声频率判定与 FSM 使用同一份昼夜时段定义。
+   * 影响下一次环境声间隔计算（computeInterval）。
+   */
+  setRhythmConfig(rhythmConfig: RhythmConfig): void {
+    this.rhythmConfig = rhythmConfig
   }
 
   // —— 内部 —— //

@@ -1019,14 +1019,18 @@ export class ImportWizard {
     }
 
     this.walkCorrection?.dispose()
-    this.walkCorrection = new WalkCorrectionView(host, initialState, {
+    const view = new WalkCorrectionView(host, initialState, {
       onChange: (state) => {
         this.flowState = updateData(this.flowState!, {
           moveStartSec: state.moveStartFrame / state.fps,
           moveEndSec: state.moveEndFrame / state.fps,
+          // IR-012：关键点/子段边界每次变更都重新导出校正后的 trackFile，
+          // 保存时写盘的 track.json 含校正 offsets 与 keypoints (§5.3)
+          trackFile: view.exportTrackFile(),
         })
       },
     })
+    this.walkCorrection = view
 
     // 5. 把跟踪结果写入流程数据
     this.flowState = updateData(this.flowState!, {
@@ -1108,7 +1112,12 @@ export class ImportWizard {
     // embeddedAudio
     card.appendChild(makeCheckbox('保留内嵌音轨（§4.8）', data.embeddedAudio, (v) => {
       this.flowState = updateData(this.flowState!, { embeddedAudio: v })
+      // embeddedAudio 切换影响音频关联下拉的可用性，重渲染
+      this.render()
     }))
+
+    // 音频素材关联 (§11.1 音视频分离入库, IR-013)
+    card.appendChild(this.renderAudioSection())
 
     // scaleHint
     card.appendChild(makeField('尺度系数 (scaleHint)', () => {
@@ -1125,6 +1134,143 @@ export class ImportWizard {
     }))
 
     content.appendChild(card)
+  }
+
+  // ── 音频素材关联 (§11.1, IR-013) ── //
+
+  /**
+   * 音频关联区块：从库选择 + 导入音频文件 + 从当前视频抽取音轨 (§4.8)。
+   *
+   * embeddedAudio=true 时 ClipMeta.audio 被忽略 (§4.8)，下拉禁用。
+   */
+  private renderAudioSection(): HTMLElement {
+    const data = this.flowState!.data
+    const wrap = div('wizard-audio-section')
+    wrap.style.cssText = 'margin-bottom:12px'
+
+    const audioEntries = this.projectData?.audio ?? []
+
+    wrap.appendChild(makeField('关联音频素材（§11.1，embeddedAudio 时忽略）', () => {
+      const select = document.createElement('select')
+      select.style.cssText = inputStyle()
+      const none = document.createElement('option')
+      none.value = ''
+      none.textContent = audioEntries.length === 0 ? '无（音频库为空，可点击下方按钮入库）' : '无'
+      select.appendChild(none)
+      for (const a of audioEntries) {
+        const opt = document.createElement('option')
+        opt.value = a.id
+        opt.textContent = `${a.label} (${a.id})`
+        if (data.audio === a.id) opt.selected = true
+        select.appendChild(opt)
+      }
+      select.disabled = data.embeddedAudio
+      select.addEventListener('change', () => {
+        this.flowState = updateData(this.flowState!, {
+          audio: select.value === '' ? null : select.value,
+        })
+      })
+      return select
+    }))
+
+    const btnRow = div('wizard-audio-buttons')
+    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:4px'
+
+    const btnImport = makeButton('导入音频文件…', () => {
+      void this.importAudioFile()
+    })
+    styleButton(btnImport, COLOR_BTN, COLOR_BTN_HOVER)
+    btnRow.appendChild(btnImport)
+
+    // §4.8 联动 (IR-010)：从当前视频抽取音轨直接入库为独立音频素材
+    if (data.videoPath) {
+      const btnExtract = makeButton('从当前视频抽取音轨', () => {
+        void this.extractAudioFromVideo()
+      })
+      styleButton(btnExtract, COLOR_BTN, COLOR_BTN_HOVER)
+      btnRow.appendChild(btnExtract)
+    }
+
+    wrap.appendChild(btnRow)
+    return wrap
+  }
+
+  /** 导入音频文件入库 (IR-013)：选文件 → 拷贝至 audio/ → 追加 audio.meta.json */
+  private async importAudioFile(): Promise<void> {
+    if (!this.projectDir) return
+    const sourcePath = await window.petalive.import.selectAudio()
+    if (!sourcePath) return
+
+    const baseName = sourcePath.replace(/\\/g, '/').split('/').pop() ?? 'audio'
+    const stem = baseName.replace(/\.[^.]+$/, '')
+    const id = this.uniqueAudioId(stem.replace(/[^A-Za-z0-9_-]/g, '_') || 'audio')
+    const ext = baseName.includes('.') ? baseName.split('.').pop()! : 'webm'
+    const meta = {
+      id,
+      file: `${id}.${ext}`,
+      label: stem,
+      category: 'action' as const,
+      cooldownSec: 20,
+      maxPerHour: 60,
+    }
+
+    try {
+      await window.petalive.import.saveAudio(this.projectDir, meta, sourcePath)
+      await this.reloadProject()
+      this.flowState = updateData(this.flowState!, { audio: meta.id })
+      this.statusMsg = `音频已入库并关联：${meta.label}`
+      this.render()
+    } catch (err) {
+      this.statusMsg = `音频入库失败：${(err as Error).message}`
+      this.render()
+    }
+  }
+
+  /** 从当前视频抽取音轨入库 (§4.8, IR-010/IR-013 联动) */
+  private async extractAudioFromVideo(): Promise<void> {
+    const videoPath = this.flowState?.data.videoPath
+    if (!this.projectDir || !videoPath) return
+    const data = this.flowState!.data
+
+    const id = this.uniqueAudioId(`${data.clipId}_audio`)
+    const meta = {
+      id,
+      file: `${id}.webm`,
+      label: `${data.clipId} 内嵌音轨`,
+      category: 'action' as const,
+      cooldownSec: 20,
+      maxPerHour: 60,
+    }
+
+    try {
+      this.statusMsg = '正在抽取音轨…'
+      this.render()
+      await window.petalive.import.extractAudio(this.projectDir, videoPath, meta)
+      await this.reloadProject()
+      this.flowState = updateData(this.flowState!, { audio: meta.id })
+      this.statusMsg = `音轨已抽取入库并关联：${meta.label}`
+      this.render()
+    } catch (err) {
+      this.statusMsg = `音轨抽取失败：${(err as Error).message}`
+      this.render()
+    }
+  }
+
+  /** 生成不重复的音频 id（已存在时追加序号） */
+  private uniqueAudioId(base: string): string {
+    const existing = new Set((this.projectData?.audio ?? []).map((a) => a.id))
+    if (!existing.has(base)) return base
+    for (let i = 2; ; i++) {
+      const candidate = `${base}_${i}`
+      if (!existing.has(candidate)) return candidate
+    }
+  }
+
+  /** 重新加载项目数据（音频/片段入库后刷新） */
+  private async reloadProject(): Promise<void> {
+    if (!this.projectDir) return
+    this.projectData = await window.petalive.import.loadProject(this.projectDir)
+    this.refreshChecklist()
   }
 
   // ── 步骤 7：转码入库 ── //

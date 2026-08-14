@@ -30,6 +30,10 @@ export class AudioPlayer {
   private readonly audioBaseUrl: string
   private readonly pool: HTMLAudioElement[] = []
   private readonly maxPoolSize = 8
+  /** 各播放元素的音量增益（IR-016：setVolume 实时重算播放中元素音量） */
+  private readonly gains = new WeakMap<HTMLAudioElement, number>()
+  /** 当前启用内嵌音轨的视频元素（§4.8；音量调节实时联动, IR-016） */
+  private embeddedVideo: HTMLVideoElement | null = null
 
   constructor(config: AudioPlayerConfig) {
     this.audioBaseUrl = config.audioBaseUrl
@@ -51,6 +55,7 @@ export class AudioPlayer {
     const audio = this.acquireElement()
     // 主进程下发 file:// 绝对 URL 时直接使用；否则相对于 audioBaseUrl 解析
     audio.src = file.startsWith('file://') ? file : `${this.audioBaseUrl}/${file}`
+    this.gains.set(audio, volumeGain)
     audio.volume = Math.min(1, this.volume * volumeGain)
 
     audio.play().catch(() => {
@@ -67,6 +72,7 @@ export class AudioPlayer {
    * 使视频自身的音轨发声以实现音画同步。
    */
   enableEmbeddedAudio(video: HTMLVideoElement): void {
+    this.embeddedVideo = video
     video.muted = this.muted
     video.volume = this.volume
   }
@@ -77,6 +83,7 @@ export class AudioPlayer {
    * embeddedAudio 片段播毕后调用，恢复常规静音状态。
    */
   disableEmbeddedAudio(video: HTMLVideoElement): void {
+    if (this.embeddedVideo === video) this.embeddedVideo = null
     video.muted = true
   }
 
@@ -89,6 +96,10 @@ export class AudioPlayer {
         audio.pause()
         audio.currentTime = 0
       }
+      // 内嵌音轨同步静音
+      if (this.embeddedVideo) this.embeddedVideo.muted = true
+    } else if (this.embeddedVideo) {
+      this.embeddedVideo.muted = false
     }
   }
 
@@ -97,9 +108,22 @@ export class AudioPlayer {
     return this.muted
   }
 
-  /** 设置全局音量 (0.0–1.0) */
+  /**
+   * 设置全局音量 (0.0–1.0)。
+   *
+   * IR-016：实时作用于播放中的 <audio> 池元素与内嵌音轨视频，
+   * 不再只影响之后播放的声响。
+   */
   setVolume(volume: number): void {
     this.volume = Math.min(1, Math.max(0, volume))
+    for (const audio of this.pool) {
+      if (!audio.paused && !audio.ended) {
+        audio.volume = Math.min(1, this.volume * (this.gains.get(audio) ?? 1))
+      }
+    }
+    if (this.embeddedVideo) {
+      this.embeddedVideo.volume = this.volume
+    }
   }
 
   /** 当前音量 */

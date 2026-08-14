@@ -44,13 +44,13 @@ import {
 import { getProjectPaths } from './persistence/project-io'
 import type { ProfileSummary } from './persistence'
 import type { RhythmConfig } from '../shared/types/behavior-config'
-import type { ShellSettings } from '../shared/types/behavior-config'
+import type { BehaviorConfig, ShellSettings } from '../shared/types/behavior-config'
 import type { Personality } from '../shared/types/persona'
 import type { NeedsState } from '../shared/types/needs-state'
 import type { ClipMeta } from '../shared/types/clip-meta'
 import type { TrackFile } from '../shared/types/track-file'
 import type { ProjectData } from '../shared/types/project'
-import { applyNeedDelta, advanceNeeds, DEFAULT_NEED_RATES, needWeightModifiers, type NeedRates } from './behavior/needs'
+import { applyNeedDelta, advanceNeeds, DEFAULT_NEED_RATES, needWeightModifiers, INTERACTION_NEED_DELTAS, type NeedRates } from './behavior/needs'
 import {
   personalityNeedRates,
   personalityWeightModifiers,
@@ -59,6 +59,7 @@ import { currentHour, rhythmWeightModifiers, rhythmNeedRates, isNightTime } from
 import { advanceOffline, computeOfflineSec } from './behavior/offline-progression'
 import { BehaviorFsm } from './behavior/fsm'
 import { createSeededRandom } from './behavior/transitions'
+import { selectClipForState } from './behavior/state-lookup'
 import { trackFileName, readTrackFile } from './pipeline/track-file'
 import {
   ClipScheduler,
@@ -66,6 +67,7 @@ import {
   type ClipSchedulerDeps,
   type RenderCommand,
 } from './scheduler/clip-scheduler'
+import { SchedulerCommandDispatcher } from './dispatch/scheduler-dispatcher'
 import { clampWindowX, groundedWindowY } from '../shared/spatial'
 
 /** 默认节律配置（§9.3：22–07 夜间） */
@@ -102,11 +104,16 @@ let activeProfile: ProfileSummary | null = null
 let needsState: NeedsState = INITIAL_NEEDS
 let scheduler: ClipScheduler | null = null
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
+let commandDispatcher: SchedulerCommandDispatcher | null = null
 let projectClips: readonly ClipMeta[] = []
 let projectTracks: ReadonlyMap<string, TrackFile> = new Map()
 let needRates: NeedRates = DEFAULT_NEED_RATES
 let loopStartMs = 0
 let lastTickMs = 0
+/** IR-007 权重热更新：当前项目的行为配置与性格（rebuildScheduler 时缓存） */
+let currentBehaviorConfig: BehaviorConfig | null = null
+let currentPersonality: Personality | null = null
+let lastWeightRefreshMs = 0
 
 /**
  * 引导全部外壳组件。在 app ready 后调用。
@@ -191,6 +198,19 @@ async function bootstrap(): Promise<void> {
   audioCoordinator.setVolume(shell0.volume)
   audioCoordinator.setAmbientFrequency(shell0.ambientFrequency)
 
+  // 4.5 调度命令分发器 (IR-001/IR-003/IR-009)：tick 循环与交互抢占共用同一分发链路
+  commandDispatcher = new SchedulerCommandDispatcher({
+    getWindow: () => mainWindow,
+    getProjectDir: () => activeProfile?.dir ?? null,
+    onActionAudio: (state, clip) => audioCoordinator?.onActionTriggered(state, clip),
+    onEmbeddedAudioEnded: () => audioCoordinator?.onEmbeddedAudioEnded(),
+  })
+
+  // 4.6 行走媒体时间上报 (IR-004)：渲染端 video.currentTime → 调度器视频时钟
+  ipcMain.on('scheduler:video-time', (_e, clipId: string, timeSec: number) => {
+    scheduler?.updateMediaTime(clipId, timeSec, Date.now())
+  })
+
   // 5. 系统托盘（§10、§12.2、§12.4）
   tray = createTray(trayCallbacks())
   await refreshTrayMenu()
@@ -222,10 +242,20 @@ async function bootstrap(): Promise<void> {
       onFeed: () => {
         needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
         void persistNeedsState()
+        refreshBehaviorWeights()
       },
       onToy: () => {
         needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
         void persistNeedsState()
+        refreshBehaviorWeights()
+      },
+      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表 / §9.4)
+      onInteractionNeeds: (interaction) => {
+        const delta = INTERACTION_NEED_DELTAS[interaction]
+        if (!delta) return
+        needsState = applyNeedDelta(needsState, delta)
+        void persistNeedsState()
+        refreshBehaviorWeights()
       },
     },
     { windowWidth: WINDOW_WIDTH, spriteBaseY: SPRITE_BASE_Y },
@@ -233,6 +263,8 @@ async function bootstrap(): Promise<void> {
   if (audioCoordinator) {
     mouseHandler.setAudioCoordinator(audioCoordinator)
   }
+  // IR-001：抢占产生的渲染命令与 tick 循环走同一分发链路
+  mouseHandler.setCommandDispatcher((commands) => processSchedulerCommands(commands))
 
   // 10. 初始化调度器：FSM → scheduler → renderer 完整运行时闭环 (§9)
   await initScheduler()
@@ -248,14 +280,17 @@ async function bootstrap(): Promise<void> {
 function trayCallbacks(): TrayMenuCallbacks {
   return {
     onFeed: () => {
-      audioCoordinator?.onActionTriggered('eat', null)
+      // GAP-005/IR-010：传递真实片段上下文（占位片段视为无片段，走默认映射）
+      audioCoordinator?.onActionTriggered('eat', resolveRealClip('eat'))
       needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
       void persistNeedsState()
+      refreshBehaviorWeights()
     },
     onToy: () => {
-      audioCoordinator?.onActionTriggered('play', null)
+      audioCoordinator?.onActionTriggered('play', resolveRealClip('play'))
       needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
       void persistNeedsState()
+      refreshBehaviorWeights()
     },
     onToggleMute: async () => {
       const muted = audioCoordinator?.toggleMute() ?? false
@@ -307,6 +342,39 @@ async function persistNeedsState(): Promise<void> {
   } catch (err) {
     console.warn('[needs] failed to save needs-state:', err)
   }
+}
+
+/** 解析状态对应的真实片段（无真实片段/占位时返回 null，供音频默认映射兜底） */
+function resolveRealClip(state: string): ClipMeta | null {
+  const clip = selectClipForState(state, projectClips)
+  return isPlaceholderClip(clip) ? null : clip
+}
+
+/** FSM 权重热更新周期 (ms, IR-007)：需求/节律漂移最多 60s 内生效 */
+const WEIGHT_REFRESH_MS = 60_000
+
+/**
+ * 需求/节律权重热更新 (§9.3/§9.4, IR-007)。
+ *
+ * 用当前 needsState 与当前小时重算 weightOverrides 并热更新 FSM 配置，
+ * 同时刷新夜间需求速率调制。会话内"饿了更想讨食""入夜更想睡"实时生效，
+ * 无需重建调度器（不打断当前调度周期）。
+ */
+function refreshBehaviorWeights(): void {
+  if (!scheduler || !currentBehaviorConfig || !currentPersonality) return
+  const hour = currentHour()
+  const rhythmConfig = currentBehaviorConfig.rhythm
+  const isNight = isNightTime(hour, rhythmConfig)
+  const weightOverrides = mergeWeightOverrides(
+    currentBehaviorConfig.weightOverrides,
+    personalityWeightModifiers(currentPersonality),
+    rhythmWeightModifiers(isNight, rhythmConfig),
+    needWeightModifiers(needsState),
+  )
+  scheduler.updateFsmConfig({ ...currentBehaviorConfig, weightOverrides })
+  // 夜间疲劳累积速率调制同步刷新 (§9.3)
+  needRates = rhythmNeedRates(isNight, personalityNeedRates(currentPersonality))
+  lastWeightRefreshMs = Date.now()
 }
 
 // ── 调度器运行时 (§9 连接 FSM → scheduler → renderer) ── //
@@ -429,8 +497,16 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
     needWeightModifiers(needsState),
   )
 
+  // IR-007：缓存行为配置与性格，供运行中权重热更新
+  currentBehaviorConfig = data.behaviorConfig
+  currentPersonality = personality
+  lastWeightRefreshMs = Date.now()
+
   // 夜间需求速率调制 (§9.3 疲劳夜间上升)
   needRates = rhythmNeedRates(isNight, needRates)
+
+  // IR-015：音频昼夜节律与 FSM 使用同一份项目配置（替换构造期硬编码）
+  audioCoordinator?.setRhythmConfig(rhythmConfig)
 
   const fsmConfig = { ...data.behaviorConfig, weightOverrides }
   const fsm = new BehaviorFsm({ config: fsmConfig, rng: createSeededRandom(Date.now()) })
@@ -442,6 +518,11 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
     tracks: projectTracks,
     getClipDurationSec: makeClipDurationResolver(projectClips, projectTracks),
   }
+
+  // §9.5 稀有动作候选 (IR-006)：招牌片段 (§4.4 C) 的状态集合
+  const rareActions = [
+    ...new Set(projectClips.filter((c) => c.signature && !isPlaceholderClip(c)).map((c) => c.state)),
+  ]
 
   const config: ClipSchedulerConfig = {
     symmetrical: data.persona.symmetrical,
@@ -457,6 +538,11 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
     },
     planOptions: {},
     rng: createSeededRandom(Date.now() + 1),
+    // §9.5 调度微随机化 (IR-006)：速率抖动 / 静止时长抖动 / 位置 x 抖动 / 变体洗牌 / 稀有动作
+    microRandom: data.behaviorConfig.microRandom,
+    personality,
+    rareActions,
+    positionJitterPx: 8,
   }
 
   scheduler = new ClipScheduler(deps, config)
@@ -496,6 +582,11 @@ function startSchedulerTick(): void {
     // 推进需求 (§9.4)
     needsState = advanceNeeds(needsState, elapsedSec, needRates)
 
+    // 需求/节律权重热更新 (IR-007)：周期漂移 ≤60s 内反映到 FSM 权重
+    if (nowMs - lastWeightRefreshMs >= WEIGHT_REFRESH_MS) {
+      refreshBehaviorWeights()
+    }
+
     // 循环片段超时后通知完成 (§9.5 变体轮换)
     if (scheduler.isPlayingLoop && loopStartMs > 0 && nowMs >= loopStartMs + LOOP_CLIP_DURATION_MS) {
       const completeResult = scheduler.completeCurrentPlayback(nowMs)
@@ -519,35 +610,14 @@ function startSchedulerTick(): void {
 /**
  * 将调度器渲染命令分发到窗口/渲染进程 (§9 scheduler → renderer)。
  *
- * - play/fade_in：发送片段 file URL 给渲染进程
- * - update_position：直接移动窗口 (§7.2)
- * - idle/hold/easing/fade_out：无需 IPC（调度器内部时序控制）
+ * 统一委托给 SchedulerCommandDispatcher（IR-001：tick 循环与交互抢占共用）：
+ * - play/fade_in/fade_out/easing → 结构化载荷 IPC (IR-002/IR-003)
+ * - update_position → 窗口平移 (§7.2)
+ * - idle → 锚定片段保活重播（节流, IR-014）
+ * - play 携带真实片段触发动作声 (§11.1, IR-009)
  */
 function processSchedulerCommands(commands: readonly RenderCommand[]): void {
-  if (!mainWindow || mainWindow.isDestroyed() || !activeProfile) return
-
-  for (const cmd of commands) {
-    switch (cmd.kind) {
-      case 'play':
-      case 'fade_in': {
-        if (isPlaceholderClip(cmd.clip)) break
-        const clipFile = join(activeProfile.dir, 'clips', `${cmd.clip.id}.webm`)
-        const clipUrl = pathToFileURL(clipFile).href
-        mainWindow.webContents.send(
-          'scheduler:play',
-          clipUrl,
-          cmd.mirrored,
-          cmd.clip.loop,
-          cmd.clip.hitbox,
-        )
-        break
-      }
-      case 'update_position':
-        mainWindow.setPosition(Math.round(cmd.x), Math.round(cmd.y), false)
-        break
-      // idle / hold / easing / fade_out — 调度器内部时序控制，无需 IPC
-    }
-  }
+  commandDispatcher?.dispatch(commands)
 }
 
 /** 停止调度器 tick 循环 */

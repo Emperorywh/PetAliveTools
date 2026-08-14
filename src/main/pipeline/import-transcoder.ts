@@ -55,6 +55,8 @@ export interface ImportTranscodeOptions {
     readonly tolerance: number
     readonly softness: number
   }
+  /** 保留内嵌音轨 (§4.8 embeddedAudio, IR-010)：默认 false 剥除音轨 */
+  readonly keepAudio?: boolean
 }
 
 /** 导入转码结果 */
@@ -87,6 +89,8 @@ export function buildImportTranscodeOptions(
     trimStartSec: request.trimStartSec,
     trimEndSec: request.trimEndSec,
     chromaKey: request.chromaKey,
+    // §4.8 embeddedAudio (IR-010)：发声片段保留内嵌音轨保证音画同步
+    keepAudio: request.keepAudio,
   }
 }
 
@@ -158,8 +162,12 @@ export function buildImportFfmpegArgs(
   args.push('-deadline', preset.deadline)
   args.push('-g', String(preset.gopSize))
 
-  // 入库时分离音频 (§11.1)
-  args.push('-an')
+  // §4.8 embeddedAudio (IR-010)：保留音轨转 Opus；其余片段剥除音轨 (§11.1)
+  if (options.keepAudio) {
+    args.push('-c:a', 'libopus', '-b:a', '96k')
+  } else {
+    args.push('-an')
+  }
 
   // 确保 alpha
   args.push('-auto-alt-ref', '0')
@@ -258,6 +266,65 @@ function runFfmpeg(
       proc.on('close', () => clearTimeout(timer))
     }
   })
+}
+
+/**
+ * 构建音轨抽取的 ffmpeg 参数 (§4.8, IR-010)。
+ *
+ * `-vn` 丢弃视频流，音轨转 Opus 96k；可选裁切与片段裁剪区间一致。
+ */
+export function buildAudioExtractArgs(
+  inputPath: string,
+  outputPath: string,
+  trimStartSec?: number,
+  trimEndSec?: number,
+): readonly string[] {
+  const args: string[] = ['-y']
+  if (trimStartSec !== undefined) {
+    args.push('-ss', formatTime(trimStartSec))
+  }
+  if (trimEndSec !== undefined && trimStartSec !== undefined) {
+    args.push('-to', formatTime(trimEndSec))
+  }
+  args.push('-i', inputPath)
+  args.push('-vn') // 仅音轨
+  args.push('-c:a', 'libopus', '-b:a', '96k')
+  args.push(outputPath)
+  return args
+}
+
+/**
+ * 从视频抽取音轨为独立音频素材 (§4.8, IR-010/IR-013 联动)。
+ *
+ * 输出 WebM/Opus 到项目 audio/ 目录，供动作触发声/环境声引用 (§11.1)。
+ * 与转码共用 ffmpeg 路径解析 (IR-011)。
+ *
+ * @param appInfo 应用环境（ffmpeg 路径解析）
+ * @param inputPath 源视频路径
+ * @param outputPath 输出音频路径（项目 audio/ 下，.webm）
+ * @param trimStartSec 可选裁切起点（秒，与片段裁剪一致）
+ * @param trimEndSec 可选裁切终点（秒）
+ */
+export async function extractAudioTrack(
+  appInfo: AppInfo,
+  inputPath: string,
+  outputPath: string,
+  trimStartSec?: number,
+  trimEndSec?: number,
+): Promise<void> {
+  const executable = resolveFfmpegPath(appInfo)
+  const args = buildAudioExtractArgs(inputPath, outputPath, trimStartSec, trimEndSec)
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true })
+
+  const { code, stderr } = await runFfmpeg(executable, args)
+  if (code !== 0) {
+    throw new Error(
+      `ffmpeg audio extraction exited with code ${code}\n` +
+        `command: ${executable} ${args.join(' ')}\n` +
+        `stderr:\n${truncate(stderr, 2000)}`,
+    )
+  }
 }
 
 function truncate(s: string, maxLen: number): string {

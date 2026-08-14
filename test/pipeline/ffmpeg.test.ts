@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as path from 'node:path'
+import { existsSync } from 'node:fs'
 
 import {
   resolveFfmpegPath,
@@ -50,22 +51,49 @@ describe('resolveFfmpegPath (§3.3)', () => {
     expect(resolveFfmpegPath(appInfo)).toBe('/custom/ffmpeg')
   })
 
-  it('returns packaged path when isPackaged=true', () => {
+  it('returns packaged path when isPackaged=true (extraResources, IR-011)', () => {
+    const appInfo: AppInfo = {
+      isPackaged: true,
+      appPath: 'C:/app/resources/app.asar',
+      resourcesPath: 'C:/app/resources'
+    }
+    const resolved = resolveFfmpegPath(appInfo)
+    expect(resolved).toBe(path.join('C:/app/resources', 'ffmpeg', 'win-x64', 'ffmpeg.exe'))
+    expect(resolved).toContain('ffmpeg.exe')
+  })
+
+  it('packaged path falls back to appPath when resourcesPath absent', () => {
     const appInfo: AppInfo = {
       isPackaged: true,
       appPath: 'C:/app'
     }
     const resolved = resolveFfmpegPath(appInfo)
-    expect(resolved).toBe(path.join('C:/app', 'ffmpeg', 'ffmpeg.exe'))
-    expect(resolved).toContain('ffmpeg.exe')
+    expect(resolved).toBe(path.join('C:/app', 'ffmpeg', 'win-x64', 'ffmpeg.exe'))
   })
 
-  it('returns "ffmpeg" from PATH in development', () => {
+  it('returns "ffmpeg" from PATH in development (no vendor binary)', () => {
     const appInfo: AppInfo = {
       isPackaged: false,
       appPath: '/dev/app'
     }
     expect(resolveFfmpegPath(appInfo)).toBe('ffmpeg')
+  })
+
+  it('dev environment prefers repo vendor binary when present (IR-011)', () => {
+    // 使用本仓库根目录：resources/ffmpeg/win-x64/ffmpeg.exe 存在与否决定分支
+    const repoRoot = path.resolve(__dirname, '../..')
+    const vendored = path.join(repoRoot, 'resources', 'ffmpeg', 'win-x64', 'ffmpeg.exe')
+    const appInfo: AppInfo = {
+      isPackaged: false,
+      appPath: repoRoot
+    }
+    const resolved = resolveFfmpegPath(appInfo)
+    // vendor 二进制交付后解析到仓库内路径；未交付时回退 PATH
+    if (existsSync(vendored)) {
+      expect(resolved).toBe(vendored)
+    } else {
+      expect(resolved).toBe('ffmpeg')
+    }
   })
 
   it('override takes priority over packaged', () => {
@@ -81,7 +109,7 @@ describe('resolveFfmpegPath (§3.3)', () => {
 // ── validateFfmpegBinary ── //
 
 describe('validateFfmpegBinary', () => {
-  it('returns true in development environment (skips existence check)', async () => {
+  it('returns true in development environment (PATH fallback skips existence check)', async () => {
     const appInfo: AppInfo = {
       isPackaged: false,
       appPath: '/dev'
@@ -89,13 +117,29 @@ describe('validateFfmpegBinary', () => {
     expect(await validateFfmpegBinary(appInfo)).toBe(true)
   })
 
-  it('returns true when override is specified (skips existence check)', async () => {
+  it('returns false when packaged binary missing (IR-011)', async () => {
     const appInfo: AppInfo = {
+      isPackaged: true,
+      appPath: 'C:/nonexistent-app',
+      resourcesPath: 'C:/nonexistent-app/resources'
+    }
+    expect(await validateFfmpegBinary(appInfo)).toBe(false)
+  })
+
+  it('validates override path existence (IR-011 显式覆盖错误应尽早暴露)', async () => {
+    const missing: AppInfo = {
       isPackaged: true,
       appPath: '/app',
       ffmpegPathOverride: '/nonexistent/ffmpeg'
     }
-    expect(await validateFfmpegBinary(appInfo)).toBe(true)
+    expect(await validateFfmpegBinary(missing)).toBe(false)
+
+    const existing: AppInfo = {
+      isPackaged: false,
+      appPath: '/app',
+      ffmpegPathOverride: __filename // 存在的文件
+    }
+    expect(await validateFfmpegBinary(existing)).toBe(true)
   })
 })
 

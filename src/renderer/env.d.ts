@@ -9,6 +9,7 @@ declare global {
       audio: import('../preload').AudioBridge
       settings: import('../preload').SettingsBridge
       scheduler: import('../preload').SchedulerBridge
+      profile: import('../preload').ProfileBridge
     }
     /** 精灵播放器实例（开发调试用） */
     __spritePlayer: import('./sprite/video-player').SpritePlayer | undefined

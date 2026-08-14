@@ -56,6 +56,8 @@ export interface TranscodeRequest {
   readonly trimStartSec?: number
   /** 可选裁切终点 (秒) */
   readonly trimEndSec?: number
+  /** 保留内嵌音轨 (§4.8 embeddedAudio, IR-010)；默认 false 剥除 */
+  readonly keepAudio?: boolean
   /** 目标帧率覆盖（默认 30 §5.2） */
   readonly fps?: number
 }
@@ -101,6 +103,7 @@ export function buildTranscodeOptions(
     alpha: request.alpha ?? true,
     trimStartSec: request.trimStartSec,
     trimEndSec: request.trimEndSec,
+    keepAudio: request.keepAudio,
     fps: request.fps ?? TARGET_FPS
   }
 }

@@ -453,6 +453,8 @@ export interface ImportTranscodeRequest {
   readonly scaleHint: number
   readonly trimStartSec?: number
   readonly trimEndSec?: number
+  /** 保留内嵌音轨 (§4.8 embeddedAudio, IR-010)：默认剥除音轨 */
+  readonly keepAudio?: boolean
   /** 色键参数（主进程 ffmpeg chromakey 滤镜） */
   readonly chromaKey?: {
     readonly referenceColor: RgbColor
@@ -486,6 +488,8 @@ export function buildTranscodeRequest(
     scaleHint: data.scaleHint,
     trimStartSec,
     trimEndSec,
+    // §4.8：embeddedAudio 片段转码时保留内嵌音轨 (IR-010)
+    keepAudio: data.embeddedAudio,
     chromaKey,
   }
 }

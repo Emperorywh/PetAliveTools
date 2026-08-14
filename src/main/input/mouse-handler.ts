@@ -18,6 +18,8 @@ import { ipcMain, BrowserWindow, screen } from 'electron'
 import { setInteractive } from '../window'
 import { showContextMenu } from './context-menu'
 import { computeGroundLine } from '../../shared/spatial'
+import type { ClipMeta } from '../../shared/types/clip-meta'
+import type { RenderCommand, TickResult } from '../scheduler/clip-scheduler'
 import {
   createDragState,
   pickupDrag,
@@ -42,15 +44,29 @@ export interface MouseHandlerCallbacks {
   onToy?: () => void
   /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
   onImportWizard?: () => void
+  /**
+   * 交互需求反馈 (§10 交互表 / §9.4, IR-008)：
+   * 抚摸/点击/拖拽抢占时调用，参数为交互类型 (petted/clicked/dragged)。
+   */
+  onInteractionNeeds?: (interaction: string) => void
 }
 
 /** 音频协调器接口（最小依赖，便于解耦注入） */
 export interface AudioCoordinatorLike {
-  onActionTriggered(action: string, clip: import('../../shared/types/clip-meta').ClipMeta | null): void
+  onActionTriggered(action: string, clip: ClipMeta | null): void
   onEmbeddedAudioEnded(): void
   toggleMute(): boolean
   readonly isMuted: boolean
 }
+
+/** 调度器接口（IR-001：返回 TickResult 供命令分发） */
+export interface PreemptableScheduler {
+  preempt(state: string, nowMs: number): TickResult
+  endPreempt(nowMs: number): TickResult
+}
+
+/** 渲染命令分发器 (IR-001)：与 tick 循环相同的 processSchedulerCommands 分发 */
+export type CommandDispatcher = (commands: readonly RenderCommand[]) => void
 
 /** IPC 频道名 */
 const IPC = {
@@ -60,7 +76,6 @@ const IPC = {
   endPreempt: 'input:end-preempt',
   dragMove: 'input:drag-move',
   contextMenu: 'input:context-menu',
-  toggleMute: 'audio:toggle-mute',
 } as const
 
 /**
@@ -68,12 +83,14 @@ const IPC = {
  *
  * 使用方式：
  *   const handler = new MouseHandler(win, callbacks, dragGeometry)
- *   handler.setScheduler(scheduler)    // 调度器就绪后注入
- *   handler.dispose()                  // 应用退出时清理
+ *   handler.setScheduler(scheduler)            // 调度器就绪后注入
+ *   handler.setCommandDispatcher(dispatch)     // IR-001：抢占命令分发（与 tick 同链路）
+ *   handler.dispose()                          // 应用退出时清理
  */
 export class MouseHandler {
-  private scheduler: { preempt(state: string, nowMs: number): unknown; endPreempt(nowMs: number): unknown } | null = null
+  private scheduler: PreemptableScheduler | null = null
   private audio: AudioCoordinatorLike | null = null
+  private dispatcher: CommandDispatcher | null = null
   private dragState: DragState | null = null
 
   constructor(
@@ -85,8 +102,13 @@ export class MouseHandler {
   }
 
   /** 注入调度器（就绪后调用） */
-  setScheduler(scheduler: MouseHandler['scheduler']): void {
+  setScheduler(scheduler: PreemptableScheduler | null): void {
     this.scheduler = scheduler
+  }
+
+  /** 注入命令分发器 (IR-001)：preempt/endPreempt 的渲染命令经此上屏 */
+  setCommandDispatcher(dispatcher: CommandDispatcher): void {
+    this.dispatcher = dispatcher
   }
 
   /** 注入音频协调器（就绪后调用） */
@@ -105,13 +127,19 @@ export class MouseHandler {
 
     ipcMain.on(IPC.preempt, (_e, interaction: string) => {
       if (interaction === 'dragged') this.startDrag()
-      this.scheduler?.preempt(interaction, Date.now())
-      this.audio?.onActionTriggered(interaction, null)
+      const result = this.scheduler?.preempt(interaction, Date.now())
+      // IR-001：抢占产生的渲染命令送入与 tick 循环相同的分发链路
+      this.dispatch(result?.commands)
+      // IR-010 / GAP-005：传递抢占选中的真实片段，embeddedAudio/clip.audio 判定可达
+      this.audio?.onActionTriggered(interaction, this.preemptTargetClip(result))
+      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表)
+      this.callbacks.onInteractionNeeds?.(interaction)
     })
 
     ipcMain.on(IPC.endPreempt, () => {
       this.endDrag()
-      this.scheduler?.endPreempt(Date.now())
+      const result = this.scheduler?.endPreempt(Date.now())
+      this.dispatch(result?.commands)
       this.audio?.onEmbeddedAudioEnded()
     })
 
@@ -122,10 +150,18 @@ export class MouseHandler {
     ipcMain.on(IPC.contextMenu, () => {
       this.handleContextMenu()
     })
+  }
 
-    ipcMain.on(IPC.toggleMute, () => {
-      this.handleToggleMute()
-    })
+  /** 分发渲染命令 (IR-001) */
+  private dispatch(commands: readonly RenderCommand[] | undefined): void {
+    if (commands && commands.length > 0) {
+      this.dispatcher?.(commands)
+    }
+  }
+
+  /** 从抢占结果中取目标片段（无调度器/无周期时为 null） */
+  private preemptTargetClip(result: TickResult | undefined): ClipMeta | null {
+    return result?.state.cycle?.targetClip ?? null
   }
 
   // —— 拖拽 —— //
@@ -188,13 +224,15 @@ export class MouseHandler {
       this.window,
       {
         onFeed: () => {
-          this.scheduler?.preempt('eat', Date.now())
-          this.audio?.onActionTriggered('eat', null)
+          const result = this.scheduler?.preempt('eat', Date.now())
+          this.dispatch(result?.commands)
+          this.audio?.onActionTriggered('eat', this.preemptTargetClip(result))
           this.callbacks.onFeed?.()
         },
         onToy: () => {
-          this.scheduler?.preempt('play', Date.now())
-          this.audio?.onActionTriggered('play', null)
+          const result = this.scheduler?.preempt('play', Date.now())
+          this.dispatch(result?.commands)
+          this.audio?.onActionTriggered('play', this.preemptTargetClip(result))
           this.callbacks.onToy?.()
         },
         onToggleMute: () => this.handleToggleMute(),

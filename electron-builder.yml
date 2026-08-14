@@ -1,12 +1,26 @@
 appId: com.petalive.desktop
 productName: PetAliveTools
 directories:
-  buildResources: build
+  buildResources: resources
+  output: dist
 files:
   - out/**/*
-  - ffmpeg/**/*
+  - package.json
+# ffmpeg 二进制随包交付 (§3.3, IR-011)：resources/ffmpeg/win-x64/ffmpeg.exe
+# → <安装目录>/resources/ffmpeg/win-x64/ffmpeg.exe（asar 外，可直接 spawn）
+extraResources:
+  - from: resources/ffmpeg
+    to: ffmpeg
+    filter:
+      - '**/*'
 win:
   target:
-    - nsis
-  arch:
-    - x64
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PetAliveTools

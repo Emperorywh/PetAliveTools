@@ -72,7 +72,7 @@ export interface TransitionResult {
  * 状态只能沿 §9.2 边表转移；step() 按带权出边采样下一状态。
  */
 export class BehaviorFsm {
-  private readonly config: BehaviorConfig | undefined
+  private config: BehaviorConfig | undefined
   private readonly rng: () => number
   private currentState: BehaviorState
   private currentAnchor: AnchorPose
@@ -85,6 +85,17 @@ export class BehaviorFsm {
     this.currentState = FSM_RECOVERY_STATE
     this.currentAnchor = 'sit'
     this.transitionCount = 0
+  }
+
+  /**
+   * 热更新 FSM 配置 (§9.3, IR-007)。
+   *
+   * 需求/节律随时间漂移时，用当前需求状态与当前小时重算 weightOverrides
+   * 并热更新，无需重建调度器（不打断当前调度周期）。
+   * 仅影响后续 step() 的权重解析；当前状态与锚定不变。
+   */
+  updateConfig(config: BehaviorConfig | undefined): void {
+    this.config = config
   }
 
   /** 当前状态 */

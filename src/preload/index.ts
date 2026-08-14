@@ -1,12 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ClipMeta } from '../shared/types/clip-meta'
-import type { Hitbox } from '../shared/types/clip-meta'
 import type { TrackFile } from '../shared/types/track-file'
+import type { AudioMeta } from '../shared/types/audio-meta'
 import type { ProjectData } from '../shared/types/project'
 import type { ImportTranscodeRequest } from '../shared/pipeline/import-flow'
 import type { ImportTranscodeResult } from '../main/pipeline/import-transcoder'
 import type { ShellSettings } from '../shared/types/behavior-config'
 import type { Personality } from '../shared/types/persona'
+import type {
+  PlayClipPayload,
+  FadeInPayload,
+  FadeOutPayload,
+  EasingPayload,
+} from '../shared/types/play-command'
 
 // Preload script — exposes a controlled API surface to the renderer.
 // IPC channels are wired here as features are implemented.
@@ -37,8 +43,6 @@ export interface AudioBridge {
   onEmbeddedStop(callback: () => void): void
   /** 监听全局静音状态变更 (§11.2) */
   onSetMuted(callback: (muted: boolean) => void): void
-  /** 请求切换静音（渲染→主进程，如快捷键入口） */
-  toggleMute(): void
 }
 
 /** 导入向导 IPC 桥接接口 */
@@ -53,7 +57,7 @@ export interface ImportBridge {
   loadProject(projectDir: string): Promise<ProjectData>
   /** 选择视频文件 */
   selectVideo(): Promise<string | null>
-  /** 转码（色键 + VP9-alpha） */
+  /** 转码（色键 + VP9-alpha；embeddedAudio 片段保留音轨 §4.8） */
   transcode(
     request: ImportTranscodeRequest,
     projectDir: string,
@@ -66,16 +70,42 @@ export interface ImportBridge {
     clip: ClipMeta,
     trackFile?: TrackFile,
   ): Promise<{ clipId: string; clipsCount: number }>
+  /** 选择音频文件 (§11.1 音频素材入库, IR-013) */
+  selectAudio(): Promise<string | null>
+  /** 音频素材入库：拷贝至 audio/ 并追加 audio.meta.json (IR-013) */
+  saveAudio(
+    projectDir: string,
+    meta: AudioMeta,
+    sourcePath: string,
+  ): Promise<{ audioId: string; audioCount: number }>
+  /** 从视频抽取音轨入库 (§4.8, IR-010/IR-013 联动) */
+  extractAudio(
+    projectDir: string,
+    sourceVideoPath: string,
+    meta: AudioMeta,
+  ): Promise<{ audioId: string; audioCount: number }>
 }
 
 /** 调度器 IPC 桥接接口 (§9 scheduler → renderer) */
 export interface SchedulerBridge {
-  /** 监听主进程播放片段指令（§9 调度器发出 play 命令） */
-  onPlayClip(callback: (fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox) => void): void
+  /** 监听主进程播放片段指令（结构化载荷, IR-002） */
+  onPlayClip(callback: (payload: PlayClipPayload) => void): void
+  /** 监听道具淡入指令 (§8.4, IR-003) */
+  onFadeIn(callback: (payload: FadeInPayload) => void): void
+  /** 监听道具淡出指令 (§8.4, IR-003) */
+  onFadeOut(callback: (payload: FadeOutPayload) => void): void
+  /** 监听兜底缓动指令 (§8.3, IR-003) */
+  onEasing(callback: (payload: EasingPayload) => void): void
+  /** 行走片段媒体时间上报 (IR-004 视频时钟)：渲染 → 主进程 */
+  reportVideoTime(clipId: string, currentTimeSec: number): void
   /** 监听素材库为空指引（§13 不崩溃，弹引导采集） */
   onShowGuidance(callback: () => void): void
-  /** 监听崩溃恢复通知（§13 重置回锚定态） */
-  onReset(callback: () => void): void
+}
+
+/** 宠物 profile IPC 桥接接口 (§12.2, IR-017) */
+export interface ProfileBridge {
+  /** 监听活跃宠物切换（渲染层据此显示宠物名/重置 UI 状态） */
+  onSwitched(callback: (id: string, name: string) => void): void
 }
 
 /** 设置面板 IPC 桥接接口 (§12.4) */
@@ -117,6 +147,11 @@ contextBridge.exposeInMainWorld('petalive', {
       ipcRenderer.invoke('import:transcode', request, projectDir, presetName, screenHeightPx),
     saveClip: (projectDir: string, clip: ClipMeta, trackFile?: TrackFile) =>
       ipcRenderer.invoke('import:saveClip', projectDir, clip, trackFile),
+    selectAudio: () => ipcRenderer.invoke('import:selectAudio'),
+    saveAudio: (projectDir: string, meta: AudioMeta, sourcePath: string) =>
+      ipcRenderer.invoke('import:saveAudio', projectDir, meta, sourcePath),
+    extractAudio: (projectDir: string, sourceVideoPath: string, meta: AudioMeta) =>
+      ipcRenderer.invoke('import:extractAudio', projectDir, sourceVideoPath, meta),
   } satisfies ImportBridge,
   input: {
     enterInteractive: () => ipcRenderer.send('input:enter-interactive'),
@@ -141,7 +176,6 @@ contextBridge.exposeInMainWorld('petalive', {
       const handler = (_e: unknown, muted: boolean): void => callback(muted)
       ipcRenderer.on('audio:set-muted', handler)
     },
-    toggleMute: () => ipcRenderer.send('audio:toggle-mute'),
   } satisfies AudioBridge,
   settings: {
     getDisplays: () => ipcRenderer.invoke('settings:get-displays'),
@@ -157,16 +191,32 @@ contextBridge.exposeInMainWorld('petalive', {
       ipcRenderer.invoke('settings:rebind-hotkey', accelerator),
   } satisfies SettingsBridge,
   scheduler: {
-    onPlayClip: (callback: (fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox) => void) => {
-      const handler = (_e: unknown, fileUrl: string, mirrored: boolean, loop: boolean, hitbox: Hitbox): void =>
-        callback(fileUrl, mirrored, loop, hitbox)
+    onPlayClip: (callback: (payload: PlayClipPayload) => void) => {
+      const handler = (_e: unknown, payload: PlayClipPayload): void => callback(payload)
       ipcRenderer.on('scheduler:play', handler)
     },
+    onFadeIn: (callback: (payload: FadeInPayload) => void) => {
+      const handler = (_e: unknown, payload: FadeInPayload): void => callback(payload)
+      ipcRenderer.on('scheduler:fade-in', handler)
+    },
+    onFadeOut: (callback: (payload: FadeOutPayload) => void) => {
+      const handler = (_e: unknown, payload: FadeOutPayload): void => callback(payload)
+      ipcRenderer.on('scheduler:fade-out', handler)
+    },
+    onEasing: (callback: (payload: EasingPayload) => void) => {
+      const handler = (_e: unknown, payload: EasingPayload): void => callback(payload)
+      ipcRenderer.on('scheduler:easing', handler)
+    },
+    reportVideoTime: (clipId: string, currentTimeSec: number) =>
+      ipcRenderer.send('scheduler:video-time', clipId, currentTimeSec),
     onShowGuidance: (callback: () => void) => {
       ipcRenderer.on('scheduler:guidance', () => callback())
     },
-    onReset: (callback: () => void) => {
-      ipcRenderer.on('scheduler:reset', () => callback())
-    },
   } satisfies SchedulerBridge,
+  profile: {
+    onSwitched: (callback: (id: string, name: string) => void) => {
+      const handler = (_e: unknown, id: string, name: string): void => callback(id, name)
+      ipcRenderer.on('profile:switched', handler)
+    },
+  } satisfies ProfileBridge,
 })

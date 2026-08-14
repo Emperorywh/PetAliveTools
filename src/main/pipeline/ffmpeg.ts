@@ -13,7 +13,7 @@
  */
 
 import * as path from 'node:path'
-import { promises as fs } from 'node:fs'
+import { promises as fs, existsSync } from 'node:fs'
 
 import {
   type TranscodePreset,
@@ -36,22 +36,31 @@ export interface AppInfo {
   readonly isPackaged: boolean
   /** Electron app 资源目录根（app.getAppPath()） */
   readonly appPath: string
+  /** 打包环境的 process.resourcesPath（extraResources 落地目录, IR-011） */
+  readonly resourcesPath?: string
   /** 可选：自定义 ffmpeg 路径覆盖（开发时通过环境变量注入） */
   readonly ffmpegPathOverride?: string
 }
 
-/** ffmpeg 二进制在各平台下的子路径（仅支持 win-x64, §3.2） */
-const FFMPEG_SUBPATH_WIN = path.join('ffmpeg', 'ffmpeg.exe')
+/**
+ * vendor ffmpeg 二进制在资源目录下的相对路径（仅支持 win-x64, §3.2）。
+ *
+ * 仓库内位置：resources/ffmpeg/win-x64/ffmpeg.exe；
+ * 打包后位置：<resourcesPath>/ffmpeg/win-x64/ffmpeg.exe（electron-builder
+ * extraResources 从 resources/ffmpeg 拷贝到 resources/ffmpeg, IR-011/IR-018）。
+ */
+const FFMPEG_VENDOR_SUBPATH = path.join('ffmpeg', 'win-x64', 'ffmpeg.exe')
 
 /**
- * 解析 ffmpeg 可执行文件绝对路径 (§3.3)。
+ * 解析 ffmpeg 可执行文件绝对路径 (§3.3, IR-011)。
  *
  * 优先级：
- * 1. 显式覆盖 (ffmpegPathOverride)
- * 2. 打包环境：资源目录下 `ffmpeg/ffmpeg.exe`
- * 3. 开发环境：`ffmpeg`（从系统 PATH）
+ * 1. 显式覆盖 (FFMPEG_PATH → ffmpegPathOverride)
+ * 2. 打包环境：`<resourcesPath>/ffmpeg/win-x64/ffmpeg.exe`（extraResources 交付）
+ * 3. 开发环境：仓库 vendor 二进制 `<appPath>/resources/ffmpeg/win-x64/ffmpeg.exe`
+ * 4. 兜底：`ffmpeg`（系统 PATH）
  *
- * @returns 可执行文件路径字符串（打包/覆盖为绝对路径，开发为 'ffmpeg'）
+ * @returns 可执行文件路径字符串（前三级为绝对路径，兜底为 'ffmpeg'）
  */
 export function resolveFfmpegPath(appInfo: AppInfo): string {
   // 1. 显式覆盖
@@ -59,24 +68,33 @@ export function resolveFfmpegPath(appInfo: AppInfo): string {
     return appInfo.ffmpegPathOverride
   }
 
-  // 2. 打包环境：资源目录
+  // 2. 打包环境：extraResources 交付的 vendor 二进制
   if (appInfo.isPackaged) {
-    return path.join(appInfo.appPath, FFMPEG_SUBPATH_WIN)
+    const resourcesRoot = appInfo.resourcesPath ?? appInfo.appPath
+    return path.join(resourcesRoot, FFMPEG_VENDOR_SUBPATH)
   }
 
-  // 3. 开发环境：依赖系统 PATH 中的 ffmpeg
+  // 3. 开发环境：仓库 vendor 二进制存在时优先（离线确定性，§3.3）
+  const vendored = path.join(appInfo.appPath, 'resources', FFMPEG_VENDOR_SUBPATH)
+  if (existsSync(vendored)) {
+    return vendored
+  }
+
+  // 4. 兜底：系统 PATH 中的 ffmpeg
   return 'ffmpeg'
 }
 
 /**
- * 验证 ffmpeg 可执行文件在打包路径下存在 (§3.3)。
+ * 验证 ffmpeg 可执行文件可达 (§3.3, IR-011)。
  *
- * 仅在打包环境中校验（开发环境依赖 PATH，不做存在性检查）。
+ * 解析结果为绝对路径（vendor/打包/显式覆盖）时校验存在性——
+ * 显式覆盖指向不存在的文件应尽早暴露而非 spawn 时才失败；
+ * PATH 兜底（'ffmpeg' 等相对名）不做存在性检查（由 spawn 报错暴露）。
  */
 export async function validateFfmpegBinary(appInfo: AppInfo): Promise<boolean> {
   const resolved = resolveFfmpegPath(appInfo)
-  if (!appInfo.isPackaged || appInfo.ffmpegPathOverride) {
-    return true // 开发环境或覆盖路径跳过存在性校验
+  if (!path.isAbsolute(resolved)) {
+    return true // PATH 兜底跳过存在性校验
   }
   try {
     await fs.access(resolved, fs.constants.X_OK)
@@ -120,6 +138,13 @@ export interface TranscodeOptions {
   readonly trimEndSec?: number
   /** 统一目标帧率覆盖（默认 30fps §5.2） */
   readonly fps?: number
+  /**
+   * 保留内嵌音轨 (§4.8 embeddedAudio, IR-010)。
+   *
+   * 默认 false：入库时剥除音轨 (`-an`)，音视频分离入库 (§11.1)。
+   * true：保留音轨并转码为 Opus (`-c:a libopus`)，供发声片段音画同步。
+   */
+  readonly keepAudio?: boolean
 }
 
 /** ffmpeg 缩放滤镜参数 */
@@ -240,8 +265,13 @@ export function buildFfmpegArgs(
   args.push('-g', String(preset.gopSize))
 
   // — 音频 — //
-  // 入库时分离音频 (§11.1)；WebM 片段不含音轨
-  args.push('-an')
+  // §4.8 embeddedAudio (IR-010)：保留音轨转 Opus，保证发声片段音画同步；
+  // 其余片段入库时剥除音轨 (§11.1 音视频分离)
+  if (options.keepAudio) {
+    args.push('-c:a', 'libopus', '-b:a', '96k')
+  } else {
+    args.push('-an')
+  }
 
   // — alpha 模式 — //
   if (preserveAlpha) {

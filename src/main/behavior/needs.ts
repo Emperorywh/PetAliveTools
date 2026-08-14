@@ -127,6 +127,23 @@ export function applyNeedDelta(
 }
 
 /**
+ * 交互类型 → 需求增量映射 (§10 交互表, IR-008)。
+ *
+ * 喂食/给玩具的需求反馈由托盘/菜单回调单独处理（含饥饿等复合变化），
+ * 本表覆盖直接抢占路径的三种交互：
+ *   - petted  抚摸 → 愉悦↑ (§10 "愉悦↑")
+ *   - clicked 点击 → 注意力↑ (§10 "注意力↑")
+ *   - dragged 拖拽 → 愉悦小幅↓（被打搅）
+ */
+export const INTERACTION_NEED_DELTAS: Readonly<
+  Record<string, Partial<Record<NeedKey, number>>>
+> = {
+  petted: { happiness: 8 },
+  clicked: { attention: 10 },
+  dragged: { happiness: -3 },
+}
+
+/**
  * 判断需求是否达到高位触发阈值 (§9.4 高位触发)。
  *
  * hunger 高 → 讨食 (beg_food)
