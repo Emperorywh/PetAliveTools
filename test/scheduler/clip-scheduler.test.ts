@@ -96,4 +96,40 @@ describe('原样片段调度器', () => {
 
     expect(instance.isPlayingLoop).toBe(true)
   })
+
+  it('指定片段预览立即播放该文件本身，不做转移规划', () => {
+    const variantA = clip('walk__left__01', 'walk')
+    const variantB = clip('walk__left__02', 'walk')
+    const instance = scheduler([
+      clip('idle_sit__none__01', 'idle_sit', true),
+      variantA,
+      variantB,
+    ])
+
+    const result = instance.preemptClip(variantB, 100)
+
+    expect(result.commands).toEqual([{ kind: 'play', clip: variantB, loop: false }])
+  })
+
+  it('指定片段预览结束后保持 FSM 状态并回到空闲', () => {
+    const target = clip('sleep__none__01', 'sleep')
+    const instance = scheduler([clip('idle_sit__none__01', 'idle_sit', true), target])
+    const fsmBefore = instance.snapshot.fsmState
+
+    instance.preemptClip(target, 0)
+    const completed = instance.completeCurrentPlayback(1_000)
+
+    expect(completed.cycleCompleted).toBe(true)
+    expect(instance.snapshot.phase).toBe('idle')
+    expect(instance.snapshot.fsmState).toBe(fsmBefore)
+  })
+
+  it('指定循环片段预览按整段循环播放', () => {
+    const target = clip('idle_sit__none__02', 'idle_sit', true)
+    const instance = scheduler([clip('idle_sit__none__01', 'idle_sit', true), target])
+
+    instance.preemptClip(target, 0)
+
+    expect(instance.isPlayingLoop).toBe(true)
+  })
 })

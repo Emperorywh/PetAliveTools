@@ -20,6 +20,7 @@ import {
   type DirectClipImportResult,
 } from '../shared/direct-media'
 import type { AudioMeta } from '../shared/types/audio-meta'
+import type { ClipMeta } from '../shared/types/clip-meta'
 import type { ProjectData } from '../shared/types/project'
 import { findItemByState } from '../shared/shooting-list'
 import { validateAudioMetaArray } from '../shared/schemas'
@@ -43,6 +44,7 @@ export const DIRECT_IMPORT_IPC = {
   SELECT_CLIP: 'import:selectClip',
   IMPORT_CLIP: 'import:copyClip',
   DELETE_CLIP: 'import:deleteClip',
+  PREVIEW_CLIP: 'import:previewClip',
   SELECT_AUDIO: 'import:selectAudio',
   SAVE_AUDIO: 'import:saveAudio',
 } as const
@@ -54,6 +56,8 @@ export const DIRECT_IMPORT_IPC = {
 export interface DirectImportHooks {
   readonly onClipImported?: (projectDir: string) => void
   readonly getDefaultProjectDir?: () => string | null
+  /** 桌面调试预览：让宠物按运行时链路播放该片段；返回错误消息，成功为 null */
+  readonly previewClip?: (projectDir: string, fileName: string) => string | null
 }
 
 /**
@@ -112,6 +116,14 @@ export function registerDirectImportIpcHandlers(hooks: DirectImportHooks = {}): 
       const result = await deleteClipDirectly(projectDir, fileName)
       hooks.onClipImported?.(projectDir)
       return result
+    },
+  )
+
+  ipcMain.handle(
+    DIRECT_IMPORT_IPC.PREVIEW_CLIP,
+    async (_event, projectDir: string, fileName: string): Promise<string | null> => {
+      await validatePreviewClip(projectDir, fileName)
+      return hooks.previewClip?.(projectDir, fileName) ?? '当前运行时未接入桌面预览'
     },
   )
 
@@ -176,6 +188,26 @@ export async function copyClipDirectly(
     fileName,
     clipsCount: clips.length,
   }
+}
+
+/**
+ * 校验桌面预览目标并解析片段描述。
+ * 只做路径/文件名/存在性检查，不读取视频内容；
+ * 实际播放由运行时钩子在宠物窗口的原生 <video> 中进行。
+ */
+export async function validatePreviewClip(
+  projectDir: string,
+  fileName: string,
+): Promise<ClipMeta> {
+  if (!path.isAbsolute(projectDir)) throw new Error('项目目录必须使用绝对路径')
+  if (fileName === '' || /[\\/]/.test(fileName) || fileName === '.' || fileName === '..') {
+    throw new Error(`片段文件名不合法: ${fileName}`)
+  }
+  const parsed = clipFromFileName(fileName)
+  if (!parsed) throw new Error(`该文件不是可识别的导入片段: ${fileName}`)
+  const paths = getProjectPaths(projectDir)
+  await fs.access(path.join(paths.clipsDir, fileName))
+  return parsed
 }
 
 /**

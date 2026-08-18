@@ -16,6 +16,7 @@ import {
   ANCHOR_STATE,
   type AnchorPose,
   type PlanOptions,
+  type TransitionPlan,
 } from '../behavior/anchor-transition'
 import { isPlaceholderClip } from '../persistence/placeholder'
 import {
@@ -234,6 +235,39 @@ export class ClipScheduler {
       nowMs,
       idleIntervalMs: 0,
       isPlaceholder: isPlaceholderClip(targetClip),
+      preserveFsm: true,
+    })
+    this.state = { ...this.state, phase: 'cycling', cycle }
+    const executed = this.executeQueueItem(cycle, nowMs)
+    if (executed.completed) this.state = this.transitionToIdlePreservingFsm(cycle, nowMs)
+    return this.result(executed.commands, true, executed.completed)
+  }
+
+  /**
+   * 立即抢占播放调用方指定的具体片段（导入向导的桌面调试预览）。
+   *
+   * 与交互 preempt 的区别：目标片段显式给定（用于检查具体变体文件），
+   * 且不做转移规划——播放队列只有这一个 play 步骤，点击后立即呈现
+   * 该文件本身。周期完成后同样经 preserveFsm 回到锚定态，
+   * 不打断 FSM 决策路径。
+   */
+  preemptClip(clip: ClipMeta, nowMs: number): TickResult {
+    const plan: TransitionPlan = {
+      from: this.state.fsmState,
+      to: clip.state,
+      steps: [{ kind: 'play', role: 'target', clip }],
+      crossAnchor: false,
+      anchors: { from: this.state.currentAnchor, to: resolveAnchorPose(clip.state, clip) },
+      usedFallback: false,
+    }
+    const cycle = createSchedulingCycle({
+      fromState: this.state.fsmState,
+      toState: clip.state,
+      plan,
+      targetClip: clip,
+      nowMs,
+      idleIntervalMs: 0,
+      isPlaceholder: isPlaceholderClip(clip),
       preserveFsm: true,
     })
     this.state = { ...this.state, phase: 'cycling', cycle }

@@ -3,7 +3,8 @@
  *
  * 用户只需选择动作和已制作完成的视频文件；窗口不会加载视频画面、
  * 抽取帧、预览抠像、设置裁剪或循环点，也不会发起转码。
- * 已导入片段可按文件删除或整组清空，删除只移除 clips/ 中的文件。
+ * 已导入片段可按文件删除或整组清空，删除只移除 clips/ 中的文件；
+ * 每行附带预览按钮，把该片段交给桌面宠物按运行时链路播放（调试用）。
  */
 
 import type { ProjectData } from '../shared/types/project'
@@ -11,6 +12,7 @@ import type { ClipDirection, ClipMeta } from '../shared/types/clip-meta'
 import {
   SHOOTING_CATEGORIES,
   SHOOTING_LIST,
+  variantSuggestionText,
   type ShootingListItem,
 } from '../shared/shooting-list'
 
@@ -137,7 +139,8 @@ export class ImportWizard {
 
   /**
    * 根据是否已选择项目渲染入口或动作清单。
-   * 页面没有 video/canvas 元素，因此不会触发任何媒体读取。
+   * 页面没有 video/canvas 元素，因此不会触发任何媒体读取；
+   * 预览播放发生在桌面宠物窗口中。
    */
   private render(): void {
     // 整页重渲染发生在导入/删除之后，保留滚动位置避免每次跳回顶部。
@@ -212,7 +215,13 @@ export class ImportWizard {
     info.appendChild(element('strong', '', item.label))
     info.appendChild(element('span', '', item.description))
     const clips = this.projectData?.clips.filter((clip) => clip.state === item.state) ?? []
-    info.appendChild(element('small', '', `已导入 ${clips.length} 个片段`))
+    info.appendChild(
+      element('small', '', `已导入 ${clips.length} 个片段 · 建议 ${variantSuggestionText(item)}`),
+    )
+    const tags = element('div', 'direct-tags')
+    if (item.startupSet) tags.appendChild(tag('最小启动集'))
+    if (item.loop) tags.appendChild(tag('循环播放'))
+    if (tags.childElementCount > 0) info.appendChild(tags)
     row.appendChild(info)
 
     let direction: ClipDirection = 'none'
@@ -237,13 +246,17 @@ export class ImportWizard {
 
   /**
    * 渲染单个动作下已导入片段的删除列表。
-   * 列表展示 clips/ 中的真实文件名，删除按钮只移除对应文件。
+   * 列表展示 clips/ 中的真实文件名；预览按钮请求主进程让桌面宠物
+   * 按运行时链路播放该片段（调试用），删除按钮只移除对应文件。
    */
   private renderClipList(item: ShootingListItem, clips: readonly ClipMeta[]): HTMLElement {
     const list = element('div', 'direct-clips')
     for (const clip of clips) {
       const line = element('div', 'direct-clip-line')
       line.appendChild(element('code', '', clip.fileName))
+      const preview = button('预览', () => void this.previewClip(clip))
+      preview.disabled = this.busy
+      line.appendChild(preview)
       const remove = button('删除', () => void this.deleteClips([clip]))
       remove.className = 'direct-danger'
       remove.disabled = this.busy
@@ -261,6 +274,22 @@ export class ImportWizard {
       list.appendChild(removeAll)
     }
     return list
+  }
+
+  /**
+   * 请求主进程让桌面宠物播放该片段（调试预览）。
+   * 页面本身不加载视频；播放发生在宠物窗口的原生 <video> 中，
+   * 与正常运行时的调度播放走完全相同的链路。
+   */
+  private async previewClip(clip: ClipMeta): Promise<void> {
+    if (!this.projectDir) return
+    try {
+      const error = await window.petalive.import.previewClip(this.projectDir, clip.fileName)
+      this.message = error ?? `正在桌面预览：${clip.fileName}`
+    } catch (err) {
+      this.message = `预览失败：${errorMessage(err)}`
+    }
+    this.render()
   }
 
   /**
@@ -286,8 +315,10 @@ export class ImportWizard {
       .direct-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid #343945; }
       .direct-info { display: flex; flex-direction: column; gap: 3px; }
       .direct-info span, .direct-info small { color: #9da6b5; }
+      .direct-tags { display: flex; gap: 6px; margin-top: 2px; }
+      .direct-tag { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; background: #263349; border: 1px solid #3b5170; color: #9fc1ff; }
       .direct-clips { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 14px; }
-      .direct-clip-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; background: #1c1f26; border: 1px solid #303542; border-radius: 7px; padding: 6px 10px; }
+      .direct-clip-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; background: #1c1f26; border: 1px solid #303542; border-radius: 7px; padding: 6px 10px; }
       .direct-clip-line code { color: #8ed0ff; word-break: break-all; font-size: 12px; }
       .direct-clips button { margin-right: 0; padding: 5px 10px; font-size: 12px; }
       .direct-remove-all { align-self: flex-end; }
@@ -315,7 +346,7 @@ function element(tag: string, className: string, text?: string): HTMLElement {
 
 /**
  * 创建按钮并绑定点击回调。
- * 回调只会触发项目选择或原样文件复制。
+ * 回调只会触发项目选择、原样文件复制或桌面调试预览。
  */
 function button(label: string, onClick: () => void): HTMLButtonElement {
   const node = document.createElement('button')
@@ -323,6 +354,14 @@ function button(label: string, onClick: () => void): HTMLButtonElement {
   node.textContent = label
   node.addEventListener('click', onClick)
   return node
+}
+
+/**
+ * 创建静态信息标签（最小启动集 / 循环播放）。
+ * 标签只是清单数据的展示，不承载交互。
+ */
+function tag(label: string): HTMLElement {
+  return element('span', 'direct-tag', label)
 }
 
 /**

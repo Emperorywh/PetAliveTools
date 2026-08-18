@@ -7,7 +7,7 @@
  * 运行于主进程。
  */
 
-import { app, BrowserWindow, ipcMain, dialog, type Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, session, type Tray } from 'electron'
 import { join } from 'node:path'
 import { promises as fs } from 'node:fs'
 import {
@@ -31,6 +31,7 @@ import { ScreenManager } from './screen'
 import { registerDirectImportIpcHandlers } from './direct-import-handlers'
 import { registerMediaScheme, handleMediaProtocol } from './media-protocol'
 import { localPathToMediaUrl } from '../shared/media-url'
+import { clipFromFileName } from '../shared/direct-media'
 import { MouseHandler } from './input/mouse-handler'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
 import {
@@ -119,6 +120,12 @@ let lastWeightRefreshMs = 0
  * 已不存在任何视频处理工具视图。
  */
 async function bootstrap(): Promise<void> {
+  // 会话级关闭内置拼写检查：应用无文本编辑场景。Chromium 的拼写词典
+  // 下载器在 profile 初始化时即会请求 gvt1.com（早于任何 JS 拦截时机），
+  // 该域名在部分网络握手失败并反复输出 SSL 错误日志；彻底消除需在
+  // userData/Dictionaries 预置 en-US-10-1.bdic，详见 docs/VERIFICATION.md
+  session.defaultSession.setSpellCheckerEnabled(false)
+
   if (process.env['PETALIVE_VIEW'] === 'import-wizard') {
     createImportWizardWindow()
     return
@@ -595,6 +602,36 @@ function stopSchedulerTick(): void {
 }
 
 /**
+ * 导入向导的桌面调试预览：让宠物按运行时链路播放指定片段。
+ * 经调度器抢占（与交互抢占同一分发链路），非循环片段由 ended 事件
+ * 自然推进，循环片段受整段循环停留时长约束，结束后均回锚定态。
+ * 返回用户可读的错误消息；成功时返回 null。
+ */
+function previewClipOnDesktop(projectDir: string, fileName: string): string | null {
+  if (!activeProfile || projectDir !== activeProfile.dir) {
+    return '桌面预览只支持当前活跃宠物的项目，请先在托盘菜单中切换宠物'
+  }
+  if (!scheduler || !mainWindow || mainWindow.isDestroyed()) {
+    return '宠物调度器尚未运行，无法在桌面预览'
+  }
+  const clip = clipFromFileName(fileName)
+  if (!clip) return `该文件不是可识别的导入片段: ${fileName}`
+
+  // 宠物可能被安全阀/托盘隐藏，预览前确保可见
+  if (!mainWindow.isVisible()) mainWindow.show()
+
+  const nowMs = Date.now()
+  const result = scheduler.preemptClip(clip, nowMs)
+  processSchedulerCommands(result.commands)
+  for (const cmd of result.commands) {
+    if ((cmd.kind === 'play' || cmd.kind === 'fade_in') && cmd.clip?.loop) {
+      loopStartMs = nowMs
+    }
+  }
+  return null
+}
+
+/**
  * 活跃宠物变化处理 (§12.2)：
  * 保存旧宠物需求状态 → 加载新宠物项目数据 → 重建设置存储 → 通知渲染进程。
  */
@@ -823,6 +860,7 @@ app.whenReady().then(() => {
       }
     },
     getDefaultProjectDir: () => activeProfile?.dir ?? null,
+    previewClip: previewClipOnDesktop,
   })
 
   bootstrap().catch((err) => console.error('[bootstrap] failed:', err))

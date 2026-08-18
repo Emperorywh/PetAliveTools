@@ -410,3 +410,57 @@ describe('buffer zone size affects activation (§6.1 8–12px)', () => {
     expect(r12.state.phase).toBe('hover')
   })
 })
+
+// ============================================================
+// 回归：undefined 覆盖不得击穿默认阈值
+// （InteractionHandler 把可选配置全部展开传入，未配置的阈值
+//   以显式 undefined 到达；展开合并会覆盖默认值，导致
+//   `dist >= undefined` 恒为 false，抚摸/拖拽永不触发）
+// ============================================================
+
+describe('createInteractionContext: undefined overrides fall back to defaults', () => {
+  it('显式 undefined 阈值回落默认值（不再被展开覆盖）', () => {
+    const c = ctx({
+      bufferPx: 10,
+      pettingMoveThreshold: undefined,
+      dragMoveThreshold: undefined,
+    })
+    expect(c.pettingMoveThreshold).toBe(DEFAULT_PETTING_MOVE_THRESHOLD)
+    expect(c.dragMoveThreshold).toBe(DEFAULT_DRAG_MOVE_THRESHOLD)
+  })
+
+  it('undefined 阈值上下文中按住 + 移动 6px 触发拖拽（运行时回归场景）', () => {
+    const c = ctx({
+      bufferPx: 10,
+      pettingMoveThreshold: undefined,
+      dragMoveThreshold: undefined,
+    })
+    const result = processSequence(
+      [
+        { type: 'move', x: 200, y: 200 },
+        { type: 'down', x: 200, y: 200 },
+        { type: 'move', x: 206, y: 200 },
+      ],
+      c,
+    )
+    expect(result.state.phase).toBe('dragging')
+    expect(hasAction(result.actions, 'drag_move')).toBe(true)
+  })
+
+  it('undefined 阈值上下文中命中盒内移动触发抚摸（运行时回归场景）', () => {
+    const c = ctx({
+      bufferPx: 10,
+      pettingMoveThreshold: undefined,
+      dragMoveThreshold: undefined,
+    })
+    const result = processSequence(
+      [
+        { type: 'move', x: 200, y: 200 },
+        { type: 'move', x: 204, y: 200 },
+      ],
+      c,
+    )
+    expect(result.state.phase).toBe('petting')
+    expect(hasAction(result.actions, 'preempt')).toBe(true)
+  })
+})

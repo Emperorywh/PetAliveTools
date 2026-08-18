@@ -65,6 +65,8 @@ export interface ImportBridge {
   copyClip(projectDir: string, request: DirectClipImportRequest): Promise<DirectClipImportResult>
   /** 删除 clips/ 中的一个已导入片段文件 */
   deleteClip(projectDir: string, fileName: string): Promise<DirectClipDeleteResult>
+  /** 桌面调试预览：让宠物按运行时链路播放该片段；返回错误消息或 null */
+  previewClip(projectDir: string, fileName: string): Promise<string | null>
   /** 选择音频文件 (§11.1 音频素材入库, IR-013) */
   selectAudio(): Promise<string | null>
   /** 音频素材入库：拷贝至 audio/ 并追加 audio.meta.json (IR-013) */
@@ -131,6 +133,8 @@ contextBridge.exposeInMainWorld('petalive', {
       ipcRenderer.invoke('import:copyClip', projectDir, request),
     deleteClip: (projectDir: string, fileName: string) =>
       ipcRenderer.invoke('import:deleteClip', projectDir, fileName),
+    previewClip: (projectDir: string, fileName: string) =>
+      ipcRenderer.invoke('import:previewClip', projectDir, fileName),
     selectAudio: () => ipcRenderer.invoke('import:selectAudio'),
     saveAudio: (projectDir: string, meta: AudioMeta, sourcePath: string) =>
       ipcRenderer.invoke('import:saveAudio', projectDir, meta, sourcePath),

@@ -33,7 +33,10 @@ export function createPetWindow(): BrowserWindow {
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: true
+      sandbox: true,
+      // 应用无文本编辑场景；关闭内置拼写检查可避免 Chromium 后台
+      // 从 gvt1.com 下载词典（该域名在部分网络握手失败，反复输出 SSL 错误日志）
+      spellcheck: false
     }
   })
 
@@ -96,6 +99,7 @@ export function createImportWizardWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
+      spellcheck: false
     },
   })
   loadToolView(win, 'import-wizard')
@@ -118,6 +122,7 @@ export function createSettingsWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
+      spellcheck: false
     },
   })
   loadToolView(win, 'settings')

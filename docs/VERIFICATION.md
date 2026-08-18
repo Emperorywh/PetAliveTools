@@ -1,6 +1,6 @@
 # 直接片段路线验证记录
 
-更新日期：2026-08-14
+更新日期：2026-08-18
 依据：[SPEC.md](SPEC.md)
 
 ## 1. 自动化结果
@@ -78,3 +78,22 @@
 10. 在目标安装环境执行一次打包产物启动冒烟。
 
 由于程序不再做格式转换，真实文件若无法播放，应回到外部专业工具重新导出，而不是在 PetAliveTools 内处理。
+
+## 6. 已排查：启动期 gvt1.com SSL 错误日志
+
+现象：dev 与打包启动后控制台反复输出
+`ERROR:ssl_client_socket_impl.cc handshake failed; net_error -100`。
+
+结论与处置（2026-08-18，netlog 抓包验证）：
+
+- 来源是 Chromium 拼写检查词典下载器请求
+  `https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`；
+  该请求在网络服务初始化时即发出（早于任何 JS 可注册拦截的时机），
+  `webPreferences.spellcheck: false`、`session.setSpellCheckerEnabled(false)`
+  与 `webRequest` 拦截均无法阻止；
+- 代码层已加双层关闭（三个窗口 `spellcheck: false` + bootstrap 会话级关闭），
+  应用自身零外网请求，无行为影响；
+- 彻底消除握手失败日志：向 `userData/Dictionaries/` 预置 `en-US-10-1.bdic`
+  （可从本机其他 Electron 应用如 VS Code 的同路径复制）。预置后实测
+  netlog 中词典请求数为 0，控制台无 SSL 错误；
+- 注意：Electron 大版本升级若改用其他词典版本号，会重新出现一次性下载尝试。

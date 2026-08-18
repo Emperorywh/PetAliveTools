@@ -111,17 +111,23 @@ export function createInteractionState(): InteractionState {
   }
 }
 
-/** 创建默认上下文 */
+/**
+ * 创建默认上下文。
+ *
+ * 未提供（undefined）的字段回落到默认值：可选配置经对象展开合并时，
+ * 显式 undefined 会覆盖默认值，导致 `dist >= undefined` 恒为 false、
+ * 抚摸/拖拽永不触发，因此这里逐字段取值。
+ */
 export function createInteractionContext(
   hitboxPx: PixelRect,
   overrides?: Partial<Omit<InteractionContext, 'hitboxPx'>>,
 ): InteractionContext {
   return {
     hitboxPx,
-    bufferPx: 10,
-    pettingMoveThreshold: DEFAULT_PETTING_MOVE_THRESHOLD,
-    dragMoveThreshold: DEFAULT_DRAG_MOVE_THRESHOLD,
-    ...overrides,
+    bufferPx: overrides?.bufferPx ?? 10,
+    pettingMoveThreshold:
+      overrides?.pettingMoveThreshold ?? DEFAULT_PETTING_MOVE_THRESHOLD,
+    dragMoveThreshold: overrides?.dragMoveThreshold ?? DEFAULT_DRAG_MOVE_THRESHOLD,
   }
 }
 

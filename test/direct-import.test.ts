@@ -8,7 +8,11 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }))
 
-import { copyClipDirectly, deleteClipDirectly } from '../src/main/direct-import-handlers'
+import {
+  copyClipDirectly,
+  deleteClipDirectly,
+  validatePreviewClip,
+} from '../src/main/direct-import-handlers'
 import {
   createDefaultPersona,
   createProject,
@@ -132,5 +136,37 @@ describe('原样片段导入', () => {
     await expect(deleteClipDirectly(projectDir, '../outside.mp4')).rejects.toThrow('片段文件名不合法')
     await expect(deleteClipDirectly(projectDir, 'a\\b.mp4')).rejects.toThrow('片段文件名不合法')
     await expect(deleteClipDirectly(projectDir, 'persona.json')).rejects.toThrow('不是可识别的导入片段')
+  })
+})
+
+describe('桌面预览目标校验', () => {
+  it('存在的片段文件解析出片段描述', async () => {
+    const sourcePath = path.join(temporaryRoot, 'prepared.mp4')
+    await fs.writeFile(sourcePath, Buffer.from('clip'))
+    const imported = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'walk',
+      direction: 'left',
+    })
+
+    const parsed = await validatePreviewClip(projectDir, imported.fileName)
+
+    expect(parsed.state).toBe('walk')
+    expect(parsed.direction).toBe('left')
+    expect(parsed.fileName).toBe(imported.fileName)
+  })
+
+  it('拒绝相对项目目录、非法文件名与不可识别命名', async () => {
+    await expect(validatePreviewClip('relative/dir', 'walk__left__01.mp4')).rejects.toThrow(
+      '项目目录必须使用绝对路径',
+    )
+    await expect(validatePreviewClip(projectDir, '..\\evil.mp4')).rejects.toThrow('片段文件名不合法')
+    await expect(validatePreviewClip(projectDir, 'random.mp4')).rejects.toThrow(
+      '不是可识别的导入片段',
+    )
+  })
+
+  it('拒绝磁盘上不存在的片段文件', async () => {
+    await expect(validatePreviewClip(projectDir, 'walk__left__01.mp4')).rejects.toThrow()
   })
 })

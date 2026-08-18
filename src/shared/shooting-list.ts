@@ -306,6 +306,16 @@ export const SHOOTING_LIST: readonly ShootingListItem[] = [
 // ── C 类别无固定条目，由用户自定义动作 ── //
 
 /**
+ * 建议段数文案：下限等于上限时显示单值，否则显示区间。
+ * 供导入向导展示，纯字符串格式化，不涉及媒体内容。
+ */
+export function variantSuggestionText(item: ShootingListItem): string {
+  return item.suggestedVariants === item.suggestedVariantsMax
+    ? `${item.suggestedVariants} 段`
+    : `${item.suggestedVariants}–${item.suggestedVariantsMax} 段`
+}
+
+/**
  * 最小启动集条目。
  *
  * 6 段主体：端坐、站立、行走×2(左/右)、趴卧、睡眠 + 过渡段。
