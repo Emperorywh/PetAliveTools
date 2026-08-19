@@ -69,6 +69,7 @@ import { WalkController } from './scheduler/walk-controller'
 import { currentItem } from './scheduler/lifecycle'
 import { SchedulerCommandDispatcher } from './dispatch/scheduler-dispatcher'
 import { clampWindowX, groundedWindowY } from '../shared/spatial'
+import { defaultHitboxPx } from '../shared/input'
 
 /** 默认节律配置（§9.3：22–07 夜间） */
 const DEFAULT_RHYTHM: RhythmConfig = {
@@ -182,7 +183,8 @@ async function bootstrap(): Promise<void> {
       const bounds = displayManager?.getBounds()
       return bounds ?? { x: 0, y: 0, width: 0, height: 0 }
     },
-    windowWidth: WINDOW_WIDTH,
+    // 边缘钳制按精灵可见范围（与拖拽放置同口径），不按窗口矩形
+    getSpriteBounds: () => defaultHitboxPx(WINDOW_WIDTH, WINDOW_HEIGHT),
   })
 
   // 3.6 可见性变化时刷新托盘菜单的「隐藏/展示」标签 (§10)

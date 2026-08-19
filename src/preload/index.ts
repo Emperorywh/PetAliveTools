@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AudioMeta } from '../shared/types/audio-meta'
 import type { ProjectData } from '../shared/types/project'
+import type { PixelRect } from '../shared/input'
 import type {
   DirectClipDeleteResult,
   DirectClipImportRequest,
@@ -26,8 +27,8 @@ export interface InputBridge {
   exitInteractive(): void
   /** 抢占：触发交互片段 (petted/clicked/dragged) */
   preempt(interaction: string): void
-  /** 结束抢占：结束循环交互片段 */
-  endPreempt(): void
+  /** 结束抢占：结束循环交互片段；回传当前命中盒供拖拽放置钳制 (§7.3) */
+  endPreempt(hitbox: PixelRect): void
   /** 拖拽位移：通知主进程光标在窗口内的位置 */
   dragMove(x: number, y: number): void
   /** 弹出右键上下文菜单 (§10) */
@@ -143,7 +144,7 @@ contextBridge.exposeInMainWorld('petalive', {
     enterInteractive: () => ipcRenderer.send('input:enter-interactive'),
     exitInteractive: () => ipcRenderer.send('input:exit-interactive'),
     preempt: (interaction: string) => ipcRenderer.send('input:preempt', interaction),
-    endPreempt: () => ipcRenderer.send('input:end-preempt'),
+    endPreempt: (hitbox: PixelRect) => ipcRenderer.send('input:end-preempt', hitbox),
     dragMove: (x: number, y: number) => ipcRenderer.send('input:drag-move', x, y),
     contextMenu: () => ipcRenderer.send('input:context-menu'),
   } satisfies InputBridge,

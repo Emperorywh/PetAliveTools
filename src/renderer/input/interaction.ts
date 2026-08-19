@@ -110,7 +110,8 @@ export class InteractionHandler {
         bridge.preempt(action.interaction)
         break
       case 'end_preempt':
-        bridge.endPreempt()
+        // 回传当前命中盒：主进程用它推导精灵包围盒，做拖拽放置钳制 (§7.3)
+        bridge.endPreempt(this.config.getHitboxPx())
         break
       case 'drag_move':
         bridge.dragMove(action.x, action.y)

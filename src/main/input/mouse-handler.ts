@@ -18,6 +18,8 @@ import { ipcMain, BrowserWindow, screen } from 'electron'
 import { setInteractive } from '../window'
 import { showContextMenu } from './context-menu'
 import { computeGroundLine } from '../../shared/spatial'
+import { defaultHitboxPx } from '../../shared/input'
+import type { PixelRect } from '../../shared/input'
 import type { ClipMeta } from '../../shared/types/clip-meta'
 import type { RenderCommand, TickResult } from '../scheduler/clip-scheduler'
 import {
@@ -27,6 +29,7 @@ import {
   releaseDrag,
   type DragState,
   type DragGeometry,
+  type SpriteBounds,
 } from '../../shared/spatial'
 
 /** 鼠标处理器回调 */
@@ -135,8 +138,8 @@ export class MouseHandler {
       this.callbacks.onInteractionNeeds?.(interaction)
     })
 
-    ipcMain.on(IPC.endPreempt, () => {
-      this.endDrag()
+    ipcMain.on(IPC.endPreempt, (_e, hitbox?: PixelRect) => {
+      this.endDrag(hitbox)
       const result = this.scheduler?.endPreempt(Date.now())
       this.dispatch(result?.commands)
       this.audio?.onEmbeddedAudioEnded()
@@ -194,14 +197,18 @@ export class MouseHandler {
     )
   }
 
-  /** 结束拖拽：松手后停在放置位置（钳制到工作区可见范围，§7.3） */
-  private endDrag(): void {
+  /**
+   * 结束拖拽：松手后按精灵可见范围钳制 x、足部落回地面线 (§7.3/§7.1)。
+   *
+   * @param hitbox 渲染进程在结束抢占时回传的当前命中盒（窗口局部像素）
+   */
+  private endDrag(hitbox?: PixelRect): void {
     if (!this.dragState || this.dragState.phase !== 'dragging') return
 
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const bounds = computeGroundLine(display.workArea)
 
-    this.dragState = releaseDrag(this.dragState, bounds, this.dragGeometry)
+    this.dragState = releaseDrag(this.dragState, bounds, this.resolveSpriteBounds(hitbox))
 
     if (!this.window.isDestroyed()) {
       this.window.setPosition(
@@ -211,6 +218,26 @@ export class MouseHandler {
     }
 
     this.dragState = null
+  }
+
+  /**
+   * 渲染进程回传的命中盒 → 精灵包围盒。
+   * 缺失或非法（IPC 载荷异常）时回落到窗口默认命中区域，
+   * 与渲染进程 getHitboxPx 的初始口径一致。
+   */
+  private resolveSpriteBounds(hitbox?: PixelRect): SpriteBounds {
+    if (
+      hitbox &&
+      Number.isFinite(hitbox.x) &&
+      Number.isFinite(hitbox.y) &&
+      Number.isFinite(hitbox.width) &&
+      Number.isFinite(hitbox.height) &&
+      hitbox.width > 0 &&
+      hitbox.height > 0
+    ) {
+      return hitbox
+    }
+    return defaultHitboxPx(this.dragGeometry.windowWidth, this.dragGeometry.windowHeight)
   }
 
   // —— 右键菜单 —— //

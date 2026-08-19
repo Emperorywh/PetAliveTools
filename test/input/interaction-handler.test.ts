@@ -18,6 +18,7 @@ interface RecordedCalls {
   enterInteractive: number
   exitInteractive: number
   endPreempt: number
+  endPreemptHitbox: PixelRect | null
 }
 
 let calls: RecordedCalls
@@ -34,6 +35,7 @@ beforeEach(() => {
     enterInteractive: 0,
     exitInteractive: 0,
     endPreempt: 0,
+    endPreemptHitbox: null,
   }
   vi.stubGlobal('window', {
     petalive: {
@@ -47,8 +49,9 @@ beforeEach(() => {
         preempt: (interaction: string) => {
           calls.preempt.push(interaction)
         },
-        endPreempt: () => {
+        endPreempt: (hitbox?: PixelRect) => {
           calls.endPreempt++
+          calls.endPreemptHitbox = hitbox ?? null
         },
         dragMove: (x: number, y: number) => {
           calls.dragMove.push([x, y])
@@ -78,13 +81,14 @@ describe('InteractionHandler 默认阈值（未配置 threshold 的构造方式�
     expect(calls.dragMove[calls.dragMove.length - 1]).toEqual([220, 210])
   })
 
-  it('拖拽后松手 → endPreempt（拖拽收尾）', () => {
+  it('拖拽后松手 → endPreempt（拖拽收尾，回传当前命中盒供放置钳制）', () => {
     handler.handleMouseMove(mouseEvent(200, 200))
     handler.handleMouseDown(mouseEvent(200, 200))
     handler.handleMouseMove(mouseEvent(220, 210))
     handler.handleMouseUp(mouseEvent(220, 210))
 
     expect(calls.endPreempt).toBeGreaterThan(0)
+    expect(calls.endPreemptHitbox).toEqual(HITBOX_PX)
   })
 
   it('命中盒内累积移动 → preempt(petted)（抚摸回归）', () => {

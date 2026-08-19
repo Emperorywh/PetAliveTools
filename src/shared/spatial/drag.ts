@@ -4,8 +4,9 @@
  * 拾取 → 跟随光标 → 松手 → 停在松手位置。
  *
  * - 拖拽中：窗口跟随光标（保持拾取时的抓取偏移，宠物"挂"在光标上）。
- * - 松手：窗口停留在松手位置，x/y 钳制到工作区可见范围，
- *   宠物可被自由摆放。
+ * - 松手：x 按精灵可见范围钳制到工作区（窗口可越出屏幕边缘，
+ *   只要宠物本体留在屏内）；y 直接落回地面线 (§7.1)，
+ *   与行走/启动的口径一致。
  *
  * 鼠标事件与命中盒由交互层驱动；本模块只提供显式状态
  * 转移与位置计算的纯逻辑。
@@ -13,7 +14,7 @@
  * 纯计算，无平台依赖。
  */
 
-import { type WorkAreaBounds, clampWindowX, clampWindowY } from './ground-line'
+import { type WorkAreaBounds } from './ground-line'
 
 /** 拖拽阶段 */
 export type DragPhase = 'idle' | 'dragging'
@@ -30,6 +31,22 @@ export interface DragGeometry {
   readonly windowWidth: number
   /** 窗口高度（像素） */
   readonly windowHeight: number
+}
+
+/**
+ * 精灵可见包围盒（窗口局部像素，由当前片段命中盒推导）。
+ * 拖拽放置的钳制口径：窗口是固定 400×400 的透明容器，
+ * 精灵只占其中一部分，按窗口矩形钳制会让宠物永远贴不到屏幕边缘。
+ */
+export interface SpriteBounds {
+  /** 精灵左上角在窗口内的 x */
+  readonly x: number
+  /** 精灵左上角在窗口内的 y */
+  readonly y: number
+  /** 精灵宽度（像素） */
+  readonly width: number
+  /** 精灵高度（像素） */
+  readonly height: number
 }
 
 /** 拖拽状态（显式状态机，转移函数返回新状态） */
@@ -82,24 +99,38 @@ export function dragFollow(state: DragState, cursor: ScreenPoint): DragState {
 }
 
 /**
- * 松手：窗口停留在松手位置，x/y 钳制到工作区可见范围，
- * 恢复 idle。
+ * 松手：窗口停留在松手位置，恢复 idle。
+ *
+ * x 按精灵可见范围钳制到工作区（窗口可越出屏幕边缘）；
+ * y 落回地面线，使精灵足部贴合 (§7.1，与行走/启动口径一致)。
  *
  * @param bounds 工作区边界
- * @param geometry 窗口几何
+ * @param sprite 精灵可见包围盒（窗口局部像素）
  */
 export function releaseDrag(
   state: DragState,
   bounds: WorkAreaBounds,
-  geometry: DragGeometry
+  sprite: SpriteBounds
 ): DragState {
   if (state.phase !== 'dragging') {
     throw new Error(`releaseDrag requires phase 'dragging' (got '${state.phase}')`)
   }
+  for (const [field, value] of Object.entries(sprite)) {
+    if (!Number.isFinite(value)) {
+      throw new Error(`invalid sprite ${field}: ${value}`)
+    }
+  }
+  if (sprite.width <= 0 || sprite.height <= 0) {
+    throw new Error(`invalid sprite size: ${sprite.width}x${sprite.height}`)
+  }
 
-  // 窗口 x/y 钳制到工作区可见范围（保证宠物留在屏内）
-  const x = clampWindowX(bounds, state.windowPos.x, geometry.windowWidth)
-  const y = clampWindowY(bounds, state.windowPos.y, geometry.windowHeight)
+  // 精灵留在工作区内，窗口透明区域允许越出屏幕边缘
+  const minX = bounds.x - sprite.x
+  const maxX = bounds.x + bounds.width - (sprite.x + sprite.width)
+  const x = maxX <= minX ? minX : Math.min(Math.max(state.windowPos.x, minX), maxX)
+
+  // 足部（精灵底边）贴合地面线
+  const y = bounds.groundLine - (sprite.y + sprite.height)
 
   return { phase: 'idle', windowPos: { x, y }, grabOffset: null }
 }

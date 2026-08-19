@@ -5,14 +5,15 @@ import {
   dragFollow,
   releaseDrag,
   isDragSettled,
-  type DragGeometry
+  type SpriteBounds
 } from '../../src/shared/spatial'
 import { computeGroundLine, type Rect } from '../../src/shared/spatial'
 
 const WORK_AREA: Rect = { x: 0, y: 0, width: 1920, height: 1080 }
 const bounds = computeGroundLine(WORK_AREA)
 
-const GEOMETRY: DragGeometry = { windowWidth: 400, windowHeight: 400 }
+/** 默认命中盒 [0.1, 0.05, 0.8, 0.9] 在 400×400 窗口内的精灵包围盒 */
+const SPRITE: SpriteBounds = { x: 40, y: 20, width: 320, height: 360 }
 
 describe('createDragState', () => {
   it('creates idle state at given position', () => {
@@ -55,44 +56,53 @@ describe('pickupDrag → dragFollow (§7.3 拾取 → 跟随光标)', () => {
 })
 
 describe('releaseDrag (§7.3 松手停在放置位置)', () => {
-  it('stays at drop position and enters idle', () => {
+  it('stays at drop x, feet land on the ground line', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 550, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 400 })
-    // window at (550, 350) — within bounds
-    const s3 = releaseDrag(s2, bounds, GEOMETRY)
+    // window at (550, 350) — x within sprite bounds; y → groundLine - 380 = 700
+    const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.phase).toBe('idle')
-    expect(s3.windowPos).toEqual({ x: 550, y: 350 })
+    expect(s3.windowPos).toEqual({ x: 550, y: 700 })
     expect(s3.grabOffset).toBeNull()
   })
 
-  it('clamps drop x to visible area', () => {
+  it('clamps drop x so the sprite stays visible (right edge)', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 2000, y: 400 })
-    // window at (1920, 350), clamp to [0, 1520] → 1520
-    const s3 = releaseDrag(s2, bounds, GEOMETRY)
+    // window at (1920, 350), sprite x range [-40, 1920-360=1560] → 1560
+    const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.phase).toBe('idle')
-    expect(s3.windowPos.x).toBe(1520)
-    expect(s3.windowPos.y).toBe(350)
+    expect(s3.windowPos.x).toBe(1560)
+    expect(s3.windowPos.y).toBe(700)
   })
 
-  it('clamps drop y above the top edge', () => {
+  it('allows the window to overhang the left screen edge', () => {
+    const s0 = createDragState({ x: 500, y: 700 })
+    const s1 = pickupDrag(s0, { x: 580, y: 750 })
+    const s2 = dragFollow(s1, { x: -20, y: 500 })
+    // window at (-100, 450) → x clamped to -40（精灵左缘贴屏幕左缘）
+    const s3 = releaseDrag(s2, bounds, SPRITE)
+    expect(s3.windowPos.x).toBe(-40)
+  })
+
+  it('drops back to the ground line regardless of drop height (top)', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 20 })
-    // window at (520, -30) → y clamped to 0
-    const s3 = releaseDrag(s2, bounds, GEOMETRY)
-    expect(s3.windowPos).toEqual({ x: 520, y: 0 })
+    // window at (520, -30) → y = groundLine(1080) - 380 = 700
+    const s3 = releaseDrag(s2, bounds, SPRITE)
+    expect(s3.windowPos).toEqual({ x: 520, y: 700 })
   })
 
-  it('clamps drop y below the work area bottom', () => {
+  it('drops back to the ground line when released below the work area', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 1500 })
-    // window at (520, 1450) → y clamped to 1080 - 400 = 680
-    const s3 = releaseDrag(s2, bounds, GEOMETRY)
-    expect(s3.windowPos).toEqual({ x: 520, y: 680 })
+    // window at (520, 1450) → y = 700，不再按窗口高度钳制（避免悬空 20px）
+    const s3 = releaseDrag(s2, bounds, SPRITE)
+    expect(s3.windowPos).toEqual({ x: 520, y: 700 })
   })
 
   it('clamps into work area with non-zero origin (secondary display)', () => {
@@ -100,9 +110,21 @@ describe('releaseDrag (§7.3 松手停在放置位置)', () => {
     const s0 = createDragState({ x: 2000, y: 700 })
     const s1 = pickupDrag(s0, { x: 2080, y: 750 })
     const s2 = dragFollow(s1, { x: 1000, y: 500 })
-    // window at (920, 450) → x clamped to [1920, 4080]
-    const s3 = releaseDrag(s2, secondary, GEOMETRY)
-    expect(s3.windowPos).toEqual({ x: 1920, y: 450 })
+    // window at (920, 450) → x clamped to [1880, 4120]；y = 1440 - 380 = 1060
+    const s3 = releaseDrag(s2, secondary, SPRITE)
+    expect(s3.windowPos).toEqual({ x: 1880, y: 1060 })
+  })
+
+  it('throws on invalid sprite bounds', () => {
+    const s0 = createDragState({ x: 500, y: 700 })
+    const s1 = pickupDrag(s0, { x: 580, y: 750 })
+    const s2 = dragFollow(s1, { x: 600, y: 400 })
+    expect(() => releaseDrag(s2, bounds, { x: 40, y: 20, width: 0, height: 360 })).toThrow(
+      /invalid sprite/,
+    )
+    expect(() =>
+      releaseDrag(s2, bounds, { x: Number.NaN, y: 20, width: 320, height: 360 }),
+    ).toThrow(/invalid sprite/)
   })
 })
 
@@ -119,7 +141,7 @@ describe('isDragSettled', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 700, y: 600 })
-    const s3 = releaseDrag(s2, bounds, GEOMETRY)
+    const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(isDragSettled(s3)).toBe(true)
   })
 })

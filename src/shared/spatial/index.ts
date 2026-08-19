@@ -8,7 +8,7 @@
 export type { Rect, WorkAreaBounds } from './ground-line'
 export { computeGroundLine, groundedWindowY, clampWindowX, clampWindowY } from './ground-line'
 
-export type { DragPhase, ScreenPoint, DragGeometry, DragState } from './drag'
+export type { DragPhase, ScreenPoint, DragGeometry, DragState, SpriteBounds } from './drag'
 export {
   createDragState,
   pickupDrag,

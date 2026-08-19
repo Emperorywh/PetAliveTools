@@ -30,6 +30,20 @@ export const BUFFER_PX_MAX = 12
 export const DEFAULT_BUFFER_PX = 10
 
 /**
+ * 窗口默认命中区域：文件名无法携带逐片段命中盒时的统一取值。
+ * 该区域只用于鼠标交互与窗口摆放钳制，不处理视频像素。
+ */
+export const DEFAULT_HITBOX: Hitbox = [0.1, 0.05, 0.8, 0.9]
+
+/**
+ * 默认命中区域在给定窗口尺寸下的像素包围盒（窗口局部坐标）。
+ * 渲染进程命中盒初始化与主进程拖拽/行走钳制的公共口径。
+ */
+export function defaultHitboxPx(windowWidth: number, windowHeight: number): PixelRect {
+  return hitboxToPixels(DEFAULT_HITBOX, { x: 0, y: 0, width: windowWidth, height: windowHeight })
+}
+
+/**
  * 将缓冲带像素值钳制到 §6.1 规定的 8–12px 范围。
  */
 export function clampBufferPx(px: number): number {

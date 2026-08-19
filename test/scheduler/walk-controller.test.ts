@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 
 import { WalkController } from '../../src/main/scheduler/walk-controller'
-import type { Rect } from '../../src/shared/spatial'
+import type { Rect, SpriteBounds } from '../../src/shared/spatial'
 
 /** 假窗口：记录 setPosition 调用（DIP 坐标） */
 function makeFakeWindow(initialX = 500) {
@@ -20,6 +20,9 @@ function makeFakeWindow(initialX = 500) {
 
 const WORK_AREA: Rect = { x: 0, y: 0, width: 1920, height: 1080 }
 
+/** 默认命中盒 [0.1, 0.05, 0.8, 0.9] 在 400×400 窗口内的精灵包围盒 */
+const SPRITE: SpriteBounds = { x: 40, y: 20, width: 320, height: 360 }
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -32,7 +35,7 @@ describe('WalkController（行走位移控制器）', () => {
     const controller = new WalkController({
       getWindow: () => win,
       getWorkArea: () => WORK_AREA,
-      windowWidth: 400,
+      getSpriteBounds: () => SPRITE,
       now: () => clock,
     })
 
@@ -59,7 +62,7 @@ describe('WalkController（行走位移控制器）', () => {
     const controller = new WalkController({
       getWindow: () => win,
       getWorkArea: () => WORK_AREA,
-      windowWidth: 400,
+      getSpriteBounds: () => SPRITE,
       now: () => clock,
     })
 
@@ -76,22 +79,42 @@ describe('WalkController（行走位移控制器）', () => {
     controller.dispose()
   })
 
-  it('右缘钳制：窗口不会移出工作区', () => {
+  it('右缘钳制：精灵可见范围不移出工作区（窗口可越出屏幕边缘）', () => {
     vi.useFakeTimers()
     const { win, state } = makeFakeWindow(1_400)
     let clock = 0
     const controller = new WalkController({
       getWindow: () => win,
       getWorkArea: () => WORK_AREA,
-      windowWidth: 400,
+      getSpriteBounds: () => SPRITE,
       now: () => clock,
     })
 
     controller.start('right')
     clock = 30_000
     vi.advanceTimersByTime(16)
-    // 1920 - 400 = 1520 为右缘
-    expect(state.x).toBe(1_520)
+    // 精灵右缘贴屏幕右缘：1920 - 360 = 1560（窗口右缘可越过 1920）
+    expect(state.x).toBe(1_560)
+    controller.dispose()
+  })
+
+  it('左缘钳制：从贴边放置位置起步不跳变（口径与拖拽放置一致）', () => {
+    vi.useFakeTimers()
+    // 拖拽放置允许窗口越出左缘（精灵 x=40 → 窗口最小 -40）
+    const { win, state } = makeFakeWindow(-40)
+    let clock = 0
+    const controller = new WalkController({
+      getWindow: () => win,
+      getWorkArea: () => WORK_AREA,
+      getSpriteBounds: () => SPRITE,
+      now: () => clock,
+    })
+
+    controller.start('left')
+    clock = 1_000
+    vi.advanceTimersByTime(16)
+    // 已在左缘：保持 -40，不会被窗口级钳制拉回 0
+    expect(state.x).toBe(-40)
     controller.dispose()
   })
 
@@ -102,7 +125,7 @@ describe('WalkController（行走位移控制器）', () => {
     const controller = new WalkController({
       getWindow: () => win,
       getWorkArea: () => WORK_AREA,
-      windowWidth: 400,
+      getSpriteBounds: () => SPRITE,
       now: () => clock,
     })
 

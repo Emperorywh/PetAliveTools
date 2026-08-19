@@ -11,8 +11,7 @@ import { mountSettingsPanel } from './settings'
 import { InteractionHandler } from './input/interaction'
 import { AudioPlayer } from './audio'
 import { DEFAULT_AUDIO_VOLUME } from '../shared/audio'
-import { hitboxToPixels, DEFAULT_BUFFER_PX } from '../shared/input'
-import type { Hitbox } from '../shared/types/clip-meta'
+import { hitboxToPixels, DEFAULT_BUFFER_PX, DEFAULT_HITBOX } from '../shared/input'
 import type { PlayClipPayload } from '../shared/types/play-command'
 
 /**
@@ -21,12 +20,6 @@ import type { PlayClipPayload } from '../shared/types/play-command'
  */
 const WINDOW_WIDTH = 400
 const WINDOW_HEIGHT = 400
-
-/**
- * 文件名无法携带逐片段命中盒，因此统一使用窗口默认命中区域。
- * 该区域只用于鼠标交互，不处理视频像素。
- */
-const DEFAULT_HITBOX: Hitbox = [0.1, 0.05, 0.8, 0.9]
 
 /**
  * 初始化当前 hash 对应的渲染视图。

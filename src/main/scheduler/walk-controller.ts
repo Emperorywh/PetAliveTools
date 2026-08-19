@@ -4,7 +4,8 @@
  * FSM 播放 walk 片段期间，按墙钟恒速水平移动宠物窗口：
  *   - 方向来自行走片段的左右标记（或调度器朝向记忆）；
  *   - 速度恒定，不随视频内容变化，也不读取媒体时间；
- *   - 每次更新钳制到当前工作区可见范围，抵达边缘即停在边缘；
+ *   - 每次更新按精灵可见范围钳制到当前工作区（与拖拽放置同口径，
+ *     窗口透明区域允许越出屏幕边缘）；
  *   - 片段结束（ended 推进周期）或任何非行走片段开始时停止位移。
  *
  * 运行于主进程；纯计算见 shared/spatial/walk-motion。
@@ -17,15 +18,15 @@ import {
   DEFAULT_WALK_VELOCITY_PX_PER_SEC,
   type WalkDirection,
 } from '../../shared/spatial/walk-motion'
-import type { Rect } from '../../shared/spatial'
+import type { Rect, SpriteBounds } from '../../shared/spatial'
 
 /** 控制器依赖（便于测试注入） */
 export interface WalkControllerDeps {
   readonly getWindow: () => BrowserWindow | null
   /** 当前工作区（显示器变化后每 tick 重新取用） */
   readonly getWorkArea: () => Rect
-  /** 宠物窗口宽度 (DIP)，用于右缘钳制 */
-  readonly windowWidth: number
+  /** 精灵可见包围盒（窗口局部像素），用于边缘钳制 */
+  readonly getSpriteBounds: () => SpriteBounds
   /** 时钟注入，缺省 Date.now */
   readonly now?: () => number
 }
@@ -92,8 +93,10 @@ export class WalkController {
     }
     const nowMs = this.deps.now?.() ?? Date.now()
     const workArea = this.deps.getWorkArea()
-    const minX = workArea.x
-    const maxX = workArea.x + workArea.width - this.deps.windowWidth
+    const sprite = this.deps.getSpriteBounds()
+    // 精灵留在工作区内；窗口透明区域可越出屏幕边缘（与拖拽放置同口径）
+    const minX = workArea.x - sprite.x
+    const maxX = workArea.x + workArea.width - (sprite.x + sprite.width)
     const x = walkXAt(
       {
         startMs: this.motion.startMs,
