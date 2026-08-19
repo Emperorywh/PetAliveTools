@@ -1,7 +1,7 @@
 /**
  * 右键上下文菜单 (§10 右键菜单)
  *
- * 菜单项：喂食 / 给玩具 / 隐藏 / 设置 / 关于。
+ * 菜单项：喂食 / 给玩具 / 呼唤 / 静音 / 导入 / 隐藏 / 设置 / 关于。
  * 在宠物窗口右键时弹出（交互态下由渲染进程触发）。
  *
  * 运行于主进程。
@@ -11,10 +11,12 @@ import { Menu, BrowserWindow } from 'electron'
 
 /** 上下文菜单回调 */
 export interface ContextMenuCallbacks {
-  /** 喂食（触发 eat 片段，道具类 §8.4，饥饿↓） */
+  /** 喂食（触发 beg_food 讨食片段，D 类，饥饿↓） */
   onFeed: () => void
-  /** 给玩具（触发 play 片段，道具类 §8.4，愉悦↑） */
+  /** 给玩具（触发 want_play 求玩片段，D 类，愉悦↑） */
   onToy: () => void
+  /** 呼唤宠物（触发 called 被呼唤转身片段，B 类） */
+  onCall: () => void
   /** 切换静音 (§11.2 全局静音开关) */
   onToggleMute: () => void
   /** 暂时隐藏（安全阀的另一入口，§10） */
@@ -33,6 +35,7 @@ export interface ContextMenuCallbacks {
  * 菜单结构：
  *   喂食
  *   给玩具
+ *   呼唤
  *   静音/取消静音
  *   ────────
  *   导入片段…
@@ -52,6 +55,7 @@ export function showContextMenu(
   const menu = Menu.buildFromTemplate([
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
+    { label: '呼唤', click: () => callbacks.onCall() },
     { label: isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
     { type: 'separator' },
     { label: '导入片段…', click: () => callbacks.onImportWizard() },

@@ -24,10 +24,12 @@ import {
 
 /** 托盘菜单回调（由外壳接线） */
 export interface TrayMenuCallbacks {
-  /** 喂食（触发 eat 片段，道具类，§8.4） */
+  /** 喂食（触发 beg_food 讨食片段，D 类，饥饿↓） */
   onFeed: () => void
-  /** 给玩具（触发 play 片段） */
+  /** 给玩具（触发 want_play 求玩片段，D 类，愉悦↑） */
   onToy: () => void
+  /** 呼唤宠物（触发 called 被呼唤转身片段，B 类） */
+  onCall: () => void
   /** 切换静音 (§11.2) */
   onToggleMute: () => void
   /** 暂时隐藏（安全阀的另一入口，§10） */
@@ -132,6 +134,7 @@ export function buildTrayTemplate(
   return [
     { label: '喂食', click: () => callbacks.onFeed() },
     { label: '给玩具', click: () => callbacks.onToy() },
+    { label: '呼唤', click: () => callbacks.onCall() },
     { label: state.isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
     { type: 'separator' },
     { label: '导入片段…', click: () => callbacks.onImportWizard() },

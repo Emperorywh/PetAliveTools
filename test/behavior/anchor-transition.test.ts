@@ -35,7 +35,12 @@ function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): Cl
 }
 
 function transitionClip(from: string, to: string): ClipMeta {
-  return clip({ id: `transition_${from}_to_${to}`, state: 'transition', anchor: 'none' })
+  return clip({
+    id: `transition_${from}_to_${to}`,
+    state: 'transition',
+    anchor: 'none',
+    transition: { from, to } as ClipMeta['transition'],
+  })
 }
 
 /** 完整素材库：全部基础状态 + §4.4 过渡项 + 一个道具片段 */

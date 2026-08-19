@@ -172,10 +172,11 @@ export function getHighNeeds(
 /**
  * 需求对 FSM 转移权重的调制 (§9.3 需求驱动)。
  *
- * 饥饿高 → beg_food 权重 ↑
+ * 饥饿高 → sleep 权重 ↑（sleep 为 FSM 边表状态）
  * 疲劳高 → sleep 权重 ↑
- * 愉悦低 → bored 权重 ↑（如果该状态存在）
- * 注意力低 → want_play 权重 ↑
+ *
+ * 情绪类动作（beg_food / drink / bored / want_play / happy）不在 FSM 边表内，
+ * 由调度器经 emotionCandidateGroups 插入触发，不在此处调制权重。
  *
  * 返回与 §9.3 倍率调制兼容的 weightOverrides 片段。
  *
@@ -187,30 +188,50 @@ export function needWeightModifiers(
 ): Record<string, Record<string, number>> {
   const mods: Record<string, Record<string, number>> = {}
 
-  // 饥饿越高 → idle_sit → beg_food 权重越高（如果有该状态）
-  if (state.hunger > 50) {
-    const factor = 1 + ((state.hunger - 50) / 50) * 3 // 50→1.0, 100→4.0
-    mods['idle_sit'] = { ...(mods['idle_sit'] ?? {}), beg_food: factor }
-  }
-
-  // 疲劳越高 → idle_sit → sleep 权重越高
+  // 疲劳越高 → idle_sit / lie → sleep 权重越高
   if (state.fatigue > 50) {
     const factor = 1 + ((state.fatigue - 50) / 50) * 3
     mods['idle_sit'] = { ...(mods['idle_sit'] ?? {}), sleep: factor }
     mods['lie'] = { ...(mods['lie'] ?? {}), sleep: factor }
   }
 
-  // 愉悦越低 → idle_sit → bored 权重越高（如果有该状态）
-  if (state.happiness < 40) {
-    const factor = 1 + ((40 - state.happiness) / 40) * 3
-    mods['idle_sit'] = { ...(mods['idle_sit'] ?? {}), bored: factor }
-  }
-
-  // 注意力越低 → idle_sit → want_play 权重越高
-  if (state.attention < 40) {
-    const factor = 1 + ((40 - state.attention) / 40) * 3
-    mods['idle_sit'] = { ...(mods['idle_sit'] ?? {}), want_play: factor }
-  }
-
   return mods
+}
+
+// —— §9.4 情绪动作插入触发 —— //
+
+/** 需求高位阈值：hunger ≥ 此值触发讨食/喝水 */
+export const EMOTION_HIGH_THRESHOLD = 70
+/** 需求低位阈值：happiness/attention ≤ 此值触发无聊/求玩 */
+export const EMOTION_LOW_THRESHOLD = 30
+/** 满足感高位阈值：happiness ≥ 此值触发开心 */
+export const EMOTION_HAPPY_THRESHOLD = 85
+
+/**
+ * 按当前需求推导情绪动作候选组（按优先级排序，组内任选其一）。
+ *
+ * 情绪动作不在 FSM 边表内（倍率不能造边），由调度器在空闲调度点
+ * 插入触发：饥饿高位 → 讨食/喝水；愉悦极高 → 开心；
+ * 愉悦低位 → 无聊；注意力低位 → 求玩。疲劳高位走 FSM 的 sleep
+ * 权重增益，不在此列。
+ *
+ * 纯逻辑，无平台依赖。
+ */
+export function emotionCandidateGroups(
+  state: NeedsState,
+  thresholds: {
+    readonly high?: number
+    readonly low?: number
+    readonly happy?: number
+  } = {},
+): readonly (readonly string[])[] {
+  const high = thresholds.high ?? EMOTION_HIGH_THRESHOLD
+  const low = thresholds.low ?? EMOTION_LOW_THRESHOLD
+  const happy = thresholds.happy ?? EMOTION_HAPPY_THRESHOLD
+  const groups: (readonly string[])[] = []
+  if (state.hunger >= high) groups.push(['beg_food', 'drink'])
+  if (state.happiness >= happy) groups.push(['happy'])
+  if (state.happiness <= low) groups.push(['bored'])
+  if (state.attention <= low) groups.push(['want_play'])
+  return groups
 }

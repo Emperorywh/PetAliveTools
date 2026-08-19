@@ -221,16 +221,24 @@ export class MouseHandler {
       this.window,
       {
         onFeed: () => {
-          const result = this.scheduler?.preempt('eat', Date.now())
+          // 喂食 → 讨食片段（D 类 beg_food；无片段时仅需求生效）
+          const result = this.scheduler?.preempt('beg_food', Date.now())
           this.dispatch(result?.commands)
-          this.audio?.onActionTriggered('eat', this.preemptTargetClip(result))
+          this.audio?.onActionTriggered('beg_food', this.preemptTargetClip(result))
           this.callbacks.onFeed?.()
         },
         onToy: () => {
-          const result = this.scheduler?.preempt('play', Date.now())
+          // 给玩具 → 求玩片段（D 类 want_play）
+          const result = this.scheduler?.preempt('want_play', Date.now())
           this.dispatch(result?.commands)
-          this.audio?.onActionTriggered('play', this.preemptTargetClip(result))
+          this.audio?.onActionTriggered('want_play', this.preemptTargetClip(result))
           this.callbacks.onToy?.()
+        },
+        onCall: () => {
+          // 呼唤 → 被呼唤转身片段（B 类 called）
+          const result = this.scheduler?.preempt('called', Date.now())
+          this.dispatch(result?.commands)
+          this.audio?.onActionTriggered('called', this.preemptTargetClip(result))
         },
         onToggleMute: () => this.handleToggleMute(),
         onHide: () => this.callbacks.onHide(),

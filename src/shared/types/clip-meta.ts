@@ -14,6 +14,18 @@ export type ClipDirection = 'left' | 'right' | 'none'
 /** 起止锚定 (§5.4 anchor)：sit=端坐, stand=站立, none=纯循环段 */
 export type ClipAnchor = 'sit' | 'stand' | 'none'
 
+/**
+ * 过渡片段端点 (§4.4 过渡项)：
+ * sit / stand 为双锚定 (§4.2)，lie / sleep / groom 为需配套进出过渡的循环片段 (§8.2)。
+ */
+export type TransitionEndpoint = 'sit' | 'stand' | 'lie' | 'sleep' | 'groom'
+
+/** 过渡片段的两端端点，由文件名状态段 `transition_<from>_to_<to>` 推导 */
+export interface TransitionClipEndpoints {
+  readonly from: TransitionEndpoint
+  readonly to: TransitionEndpoint
+}
+
 /** 命中盒 [x, y, w, h]，相对窗口归一化坐标 [0, 1] */
 export type Hitbox = readonly [number, number, number, number]
 
@@ -28,8 +40,13 @@ export interface ClipMeta {
   readonly id: string
   /** clips/ 下的真实文件名，保留导入文件的扩展名 */
   readonly fileName: string
-  /** FSM 状态键，如 "walk" / "idle_sit" (§9.1) */
+  /** FSM 状态键，如 "walk" / "idle_sit" (§9.1)；过渡片段固定为 "transition" */
   readonly state: string
+  /**
+   * 过渡片段端点（state === "transition" 时存在）。
+   * 由文件名状态段 `transition_<from>_to_<to>` 推导，供锚定中转查找 (§8.1/§8.2)。
+   */
+  readonly transition?: TransitionClipEndpoints
   /** 片段类别 (§5.4) */
   readonly category: ClipCategory
   /** 方向 (§5.4) */

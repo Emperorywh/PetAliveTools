@@ -8,13 +8,23 @@
  */
 
 import type { ProjectData } from '../shared/types/project'
-import type { ClipDirection, ClipMeta } from '../shared/types/clip-meta'
+import type { ClipDirection, ClipMeta, TransitionEndpoint } from '../shared/types/clip-meta'
+import { transitionKey } from '../shared/direct-media'
 import {
   SHOOTING_CATEGORIES,
   SHOOTING_LIST,
   variantSuggestionText,
   type ShootingListItem,
 } from '../shared/shooting-list'
+
+/** 过渡片段可选端点（§4.2 双锚定 + §8.2 循环进出） */
+const TRANSITION_ENDPOINT_OPTIONS: readonly { value: TransitionEndpoint; label: string }[] = [
+  { value: 'sit', label: '端坐' },
+  { value: 'stand', label: '站立' },
+  { value: 'lie', label: '趴卧' },
+  { value: 'sleep', label: '睡眠' },
+  { value: 'groom', label: '理毛' },
+]
 
 /**
  * 直接导入窗口状态。
@@ -87,9 +97,14 @@ export class ImportWizard {
 
   /**
    * 选择文件后请求主进程逐字节复制。
-   * 导入成功后重新扫描目录，使计数立即刷新。
+   * stateKey 为目标状态键：清单状态（如 walk）、过渡端点键
+   * （transition_sit_to_stand）或 sig_ 招牌键。导入成功后重新扫描目录。
    */
-  private async importClip(item: ShootingListItem, direction: ClipDirection): Promise<void> {
+  private async importClip(
+    stateKey: string,
+    direction: ClipDirection,
+    label: string,
+  ): Promise<void> {
     if (!this.projectDir || this.busy) return
     const sourcePath = await window.petalive.import.selectClip()
     if (!sourcePath) return
@@ -100,17 +115,31 @@ export class ImportWizard {
     try {
       const result = await window.petalive.import.copyClip(this.projectDir, {
         sourcePath,
-        state: item.state,
+        state: stateKey,
         direction,
       })
       this.projectData = await window.petalive.import.loadProject(this.projectDir)
-      this.message = `已原样导入：${result.fileName}`
+      this.message = `已原样导入「${label}」：${result.fileName}`
     } catch (err) {
       this.message = `导入失败：${errorMessage(err)}`
     } finally {
       this.busy = false
       this.render()
     }
+  }
+
+  /**
+   * 导入自定义招牌动作 (§4.4 C 类)：用户输入动作名，
+   * 以 sig_<名称> 状态键原样复制。导入后作为低频稀有动作触发。
+   */
+  private async importSignatureClip(rawName: string): Promise<void> {
+    const name = rawName.trim().toLowerCase().replace(/\s+/g, '_')
+    if (!/^[a-z0-9_]{1,24}$/.test(name)) {
+      this.message = '招牌动作名称只能包含小写字母、数字和下划线（1–24 字符）'
+      this.render()
+      return
+    }
+    await this.importClip(`sig_${name}`, 'none', `招牌动作 ${name}`)
   }
 
   /**
@@ -185,6 +214,7 @@ export class ImportWizard {
   /**
    * 按行为类别展示直接导入按钮与已导入数量。
    * 左右方向仅决定文件名中的动作映射，不会对画面做镜像。
+   * C 类无固定清单条目：渲染自定义动作名输入 + sig_ 导入入口。
    */
   private renderActionList(): HTMLElement {
     const wrapper = element('div', 'direct-categories')
@@ -196,8 +226,14 @@ export class ImportWizard {
       const section = element('section', 'direct-panel')
       section.appendChild(element('h2', '', category.label))
       section.appendChild(element('p', 'direct-subtitle', category.subtitle))
-      for (const item of SHOOTING_LIST.filter((candidate) => candidate.category === category.id)) {
-        section.appendChild(this.renderActionRow(item))
+      if (category.id === 'C') {
+        section.appendChild(this.renderSignatureImport())
+      } else {
+        for (const item of SHOOTING_LIST.filter(
+          (candidate) => candidate.category === category.id,
+        )) {
+          section.appendChild(this.renderActionRow(item))
+        }
       }
       wrapper.appendChild(section)
     }
@@ -205,7 +241,51 @@ export class ImportWizard {
   }
 
   /**
+   * 渲染 C 类自定义招牌动作导入区。
+   * 用户输入动作名，文件以 sig_<名称> 状态键原样复制；
+   * 已导入的招牌动作按状态分组展示，可删除或预览。
+   */
+  private renderSignatureImport(): HTMLElement {
+    const wrap = element('div', 'direct-item')
+    const row = element('div', 'direct-row')
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.placeholder = '动作名称（如 backflip）'
+    input.className = 'direct-input'
+    input.disabled = this.busy
+    row.appendChild(input)
+    const importButton = button('选择并导入', () => void this.importSignatureClip(input.value))
+    importButton.disabled = this.busy
+    row.appendChild(importButton)
+    wrap.appendChild(row)
+    wrap.appendChild(
+      element(
+        'p',
+        'direct-subtitle',
+        '招牌动作以 sig_<名称> 记录，播放时走短淡入淡出，低频随机触发增添灵动感。',
+      ),
+    )
+
+    const signatureClips = this.projectData?.clips.filter((clip) => clip.signature) ?? []
+    const byState = new Map<string, ClipMeta[]>()
+    for (const clip of signatureClips) {
+      const group = byState.get(clip.state) ?? []
+      group.push(clip)
+      byState.set(clip.state, group)
+    }
+    for (const [state, clips] of byState) {
+      const group = element('div', 'direct-clips')
+      group.appendChild(element('strong', '', state))
+      group.appendChild(this.renderClipList({ state, label: state } as ShootingListItem, clips))
+      wrap.appendChild(group)
+    }
+    return wrap
+  }
+
+  /**
    * 渲染单个动作的方向选择、导入按钮和已导入片段删除列表。
+   * 过渡动作额外提供起点/终点姿态选择，端点编码进文件名状态段
+   * （如 transition_sit_to_stand），供锚定中转机制查找 (§8.1/§8.2)。
    * 视频文件在用户确认前不会被页面打开。
    */
   private renderActionRow(item: ShootingListItem): HTMLElement {
@@ -224,6 +304,28 @@ export class ImportWizard {
     if (tags.childElementCount > 0) info.appendChild(tags)
     row.appendChild(info)
 
+    // 过渡片段：选择起点/终点姿态，组合成端点状态键
+    let transitionFrom: TransitionEndpoint = 'sit'
+    let transitionTo: TransitionEndpoint = 'stand'
+    if (item.state === 'transition') {
+      const fromSelect = document.createElement('select')
+      for (const option of TRANSITION_ENDPOINT_OPTIONS) {
+        fromSelect.append(new Option(`起点：${option.label}`, option.value))
+      }
+      fromSelect.addEventListener('change', () => {
+        transitionFrom = fromSelect.value as TransitionEndpoint
+      })
+      const toSelect = document.createElement('select')
+      for (const option of TRANSITION_ENDPOINT_OPTIONS) {
+        toSelect.append(new Option(`终点：${option.label}`, option.value))
+      }
+      toSelect.addEventListener('change', () => {
+        transitionTo = toSelect.value as TransitionEndpoint
+      })
+      row.appendChild(fromSelect)
+      row.appendChild(toSelect)
+    }
+
     let direction: ClipDirection = 'none'
     if (item.direction === 'left-right' || item.direction === 'both') {
       const select = document.createElement('select')
@@ -235,7 +337,13 @@ export class ImportWizard {
       row.appendChild(select)
     }
 
-    const importButton = button('选择并导入', () => void this.importClip(item, direction))
+    const importButton = button('选择并导入', () => {
+      const stateKey =
+        item.state === 'transition' ? transitionKey(transitionFrom, transitionTo) : item.state
+      const label =
+        item.state === 'transition' ? `${item.label}（${transitionFrom}→${transitionTo}）` : item.label
+      void this.importClip(stateKey, direction, label)
+    })
     importButton.disabled = this.busy
     row.appendChild(importButton)
     wrap.appendChild(row)
@@ -312,7 +420,9 @@ export class ImportWizard {
       .direct-panel { margin: 14px 0; padding: 18px; background: #22252d; border: 1px solid #343945; border-radius: 10px; }
       .direct-panel h2 { margin: 0 0 6px; font-size: 18px; }
       .direct-subtitle { margin: 0 0 12px; color: #929baa; }
-      .direct-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid #343945; }
+      .direct-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid #343945; }
+      .direct-row .direct-info { flex: 1 1 260px; min-width: 0; }
+      .direct-input { border: 1px solid #4a5363; border-radius: 6px; background: #1c1f26; color: #f3f5f8; padding: 8px 12px; flex: 1 1 200px; }
       .direct-info { display: flex; flex-direction: column; gap: 3px; }
       .direct-info span, .direct-info small { color: #9da6b5; }
       .direct-tags { display: flex; gap: 6px; margin-top: 2px; }

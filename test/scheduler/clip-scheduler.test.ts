@@ -133,3 +133,218 @@ describe('原样片段调度器', () => {
     expect(instance.isPlayingLoop).toBe(true)
   })
 })
+
+describe('情绪动作插入 (§9.4 情绪表达)', () => {
+  function emotionScheduler(
+    clips: readonly ClipMeta[],
+    needs: { hunger: number; fatigue: number; happiness: number; attention: number } | null,
+    overrides: Partial<ClipSchedulerConfig> = {},
+  ): ClipScheduler {
+    const config: ClipSchedulerConfig = {
+      idleConfig: {
+        idleIntervalMs: 8_000,
+        activeIntervalMs: 3_000,
+        exhaustionMultiplier: 1.5,
+        exhaustionThreshold: 3,
+      },
+      planOptions: {},
+      rng: () => 0,
+      needsProvider: () => needs,
+      ...overrides,
+    }
+    return new ClipScheduler({ fsm: new BehaviorFsm({ rng: () => 0 }), clips }, config)
+  }
+
+  it('饥饿高位时插入讨食片段且不推进 FSM', () => {
+    const hungry = { hunger: 90, fatigue: 20, happiness: 70, attention: 70 }
+    const instance = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('beg_food__none__01', 'beg_food')],
+      hungry,
+    )
+
+    const result = instance.tick(0)
+
+    expect(result.cycleStarted).toBe(true)
+    expect(result.commands).toContainEqual({
+      kind: 'play',
+      clip: clip('beg_food__none__01', 'beg_food'),
+      loop: false,
+    })
+    // 插入周期 preserveFsm：FSM 状态保持 idle_sit
+    expect(instance.snapshot.fsmState).toBe('idle_sit')
+    expect(instance.snapshot.cycle?.preserveFsm).toBe(true)
+  })
+
+  it('候选组内只在有真实片段的状态中选择（讨食缺失时选喝水）', () => {
+    const hungry = { hunger: 90, fatigue: 20, happiness: 70, attention: 70 }
+    const instance = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('drink__none__01', 'drink')],
+      hungry,
+    )
+
+    const result = instance.tick(0)
+
+    expect(result.commands.some((cmd) => cmd.kind === 'play' && cmd.clip.state === 'drink')).toBe(
+      true,
+    )
+  })
+
+  it('愉悦低位插入无聊、注意力低位插入求玩', () => {
+    const boredState = { hunger: 20, fatigue: 20, happiness: 20, attention: 70 }
+    const bored = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('bored__none__01', 'bored', true)],
+      boredState,
+    )
+    expect(
+      bored.tick(0).commands.some((cmd) => cmd.kind === 'play' && cmd.clip.state === 'bored'),
+    ).toBe(true)
+
+    const lonely = { hunger: 20, fatigue: 20, happiness: 70, attention: 20 }
+    const wantPlay = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('want_play__none__01', 'want_play')],
+      lonely,
+    )
+    expect(
+      wantPlay
+        .tick(0)
+        .commands.some((cmd) => cmd.kind === 'play' && cmd.clip.state === 'want_play'),
+    ).toBe(true)
+  })
+
+  it('冷却期内同一情绪不重复插入，走 FSM 常规路径', () => {
+    const hungry = { hunger: 90, fatigue: 20, happiness: 70, attention: 70 }
+    const instance = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('beg_food__none__01', 'beg_food')],
+      hungry,
+      { emotionCooldownMs: 60_000 },
+    )
+
+    instance.tick(0)
+    instance.completeCurrentPlayback(1_000)
+
+    // 冷却内（t=2000 距插入 t=0 仅 2s）：不再插入 beg_food，走 FSM（→lie）
+    const second = instance.tick(2_000)
+    expect(second.cycleStarted).toBe(true)
+    expect(instance.snapshot.cycle?.toState).not.toBe('beg_food')
+
+    // 推完该周期（缺过渡 → 兜底缓动 + play 两项）
+    instance.tick(2_100)
+    instance.completeCurrentPlayback(3_000)
+
+    // 冷却过后（t=61s）可再次插入
+    instance.tick(61_000)
+    expect(instance.snapshot.cycle?.toState).toBe('beg_food')
+  })
+
+  it('无需求提供者时不插入情绪动作', () => {
+    const instance = emotionScheduler(
+      [clip('idle_sit__none__01', 'idle_sit', true), clip('beg_food__none__01', 'beg_food')],
+      null,
+    )
+
+    const result = instance.tick(0)
+
+    expect(instance.snapshot.cycle?.toState).not.toBe('beg_food')
+    expect(result.cycleStarted).toBe(true)
+  })
+})
+
+describe('行走朝向连续性 (§9.5 方向变体)', () => {
+  /** 带方向标记的片段（本文件基础 clip 助手固定 direction: none） */
+  function dclip(id: string, state: string, direction: 'left' | 'right'): ClipMeta {
+    return { ...clip(id, state), direction }
+  }
+
+  function facingScheduler(fsmRng: () => number, clips: readonly ClipMeta[]): ClipScheduler {
+    const config: ClipSchedulerConfig = {
+      idleConfig: {
+        idleIntervalMs: 1,
+        activeIntervalMs: 1,
+        exhaustionMultiplier: 1.5,
+        exhaustionThreshold: 3,
+      },
+      planOptions: {},
+      rng: () => 0.9,
+    }
+    return new ClipScheduler({ fsm: new BehaviorFsm({ rng: fsmRng }), clips }, config)
+  }
+
+  /**
+   * 驱动调度器完成当前周期回到 idle，并推进到下一个周期开始。
+   * play 项以显式完成调用模拟 ended，计时项按时间推进。
+   */
+  function runCycle(instance: ClipScheduler, startMs: number): void {
+    let nowMs = startMs
+    instance.tick(nowMs)
+    let guard = 0
+    while (instance.snapshot.phase === 'cycling' && guard++ < 10) {
+      const cycle = instance.snapshot.cycle
+      if (!cycle || cycle.queue.completed) break
+      const item = cycle.queue.items[cycle.queue.currentIndex]
+      if (!item) break
+      if (item.durationMs === null) {
+        instance.completeCurrentPlayback(nowMs + 5_000)
+        nowMs += 5_000
+      } else {
+        nowMs = cycle.queue.currentItemStartMs + item.durationMs + 1
+        instance.tick(nowMs)
+      }
+    }
+  }
+
+  it('优先选择与当前朝向同向的行走片段，转身更新朝向后行走方向跟随', () => {
+    const clips = [
+      clip('idle_sit__none__01', 'idle_sit', true),
+      clip('stand__none__01', 'stand'),
+      dclip('walk__left__01', 'walk', 'left'),
+      dclip('walk__right__01', 'walk', 'right'),
+      dclip('turn__left__01', 'turn', 'left'),
+    ]
+    // FSM 随机源：首步 idle_sit→stand（0.5），此后 stand→walk、turn→walk 等
+    // 全部命中 walk/turn 分支（0.9 / 0）
+    let draw = 0
+    const seq = [0.5, 0.9, 0.9, 0]
+    const instance = facingScheduler(() => seq[draw++ % seq.length] ?? 0, clips)
+
+    // 周期 1：idle_sit → stand（跨锚定走兜底缓动）
+    runCycle(instance, 0)
+    expect(instance.snapshot.fsmState).toBe('stand')
+
+    // 周期 2：stand → walk。初始朝向 right → 应选向右片段
+    runCycle(instance, 10_000)
+    expect(instance.snapshot.fsmState).toBe('walk')
+    expect(instance.snapshot.lastClip?.direction).toBe('right')
+    expect(instance.snapshot.facing).toBe('right')
+
+    // 周期 3：walk → turn（0.9*5=4.5 → turn）。仅有向左转身片段 → 朝向翻转为 left
+    runCycle(instance, 20_000)
+    expect(instance.snapshot.fsmState).toBe('turn')
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+    expect(instance.snapshot.facing).toBe('left')
+
+    // 周期 4：turn → walk。朝向 left → 应选向左片段，位移方向与画面一致
+    runCycle(instance, 30_000)
+    expect(instance.snapshot.fsmState).toBe('walk')
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+    expect(instance.snapshot.facing).toBe('left')
+  })
+
+  it('无同向片段时退回任意方向片段', () => {
+    const clips = [
+      clip('idle_sit__none__01', 'idle_sit', true),
+      clip('stand__none__01', 'stand'),
+      dclip('walk__left__01', 'walk', 'left'),
+    ]
+    let draw = 0
+    const seq = [0.5, 0.9]
+    const instance = facingScheduler(() => seq[draw++ % seq.length] ?? 0, clips)
+
+    runCycle(instance, 0)
+    runCycle(instance, 10_000)
+
+    // 初始朝向 right 但只有向左片段 → 仍可播放，朝向跟随片段
+    expect(instance.snapshot.fsmState).toBe('walk')
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+    expect(instance.snapshot.facing).toBe('left')
+  })
+})

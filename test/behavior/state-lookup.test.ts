@@ -7,8 +7,10 @@ import {
   findTransitionClip,
   getClipVariants,
   selectClipForState,
+  type TransitionEndpoint,
 } from '../../src/main/behavior/state-lookup'
 import { isPlaceholderClip } from '../../src/main/persistence/placeholder'
+import { clipFromFileName } from '../../src/shared/direct-media'
 import type { ClipMeta } from '../../src/shared/types/clip-meta'
 
 function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): ClipMeta {
@@ -28,8 +30,13 @@ function clip(overrides: Partial<ClipMeta> & Pick<ClipMeta, 'id' | 'state'>): Cl
   }
 }
 
-function transitionClip(from: string, to: string): ClipMeta {
-  return clip({ id: `transition_${from}_to_${to}`, state: TRANSITION_CLIP_STATE, anchor: 'none' })
+function transitionClip(from: TransitionEndpoint, to: TransitionEndpoint): ClipMeta {
+  return clip({
+    id: `transition_${from}_to_${to}__none__01`,
+    state: TRANSITION_CLIP_STATE,
+    anchor: 'none',
+    transition: { from, to },
+  })
 }
 
 describe('transition clip id convention (§4.4 过渡项)', () => {
@@ -47,18 +54,48 @@ describe('transition clip id convention (§4.4 过渡项)', () => {
     expect(parseTransitionClip(transitionClip('groom', 'sit'))).toEqual({ from: 'groom', to: 'sit' })
   })
 
-  it('returns null for non-transition clips or malformed ids', () => {
+  it('returns null for non-transition clips or clips without endpoints', () => {
     expect(parseTransitionClip(clip({ id: 'idle_sit_01', state: 'idle_sit' }))).toBeNull()
-    expect(parseTransitionClip(transitionClip('sit', 'run'))).toBeNull()
-    expect(parseTransitionClip(transitionClip('fly', 'sit'))).toBeNull()
-    expect(parseTransitionClip(clip({ id: '起身过渡', state: TRANSITION_CLIP_STATE }))).toBeNull()
+    // 旧版导入向导产生的无端点过渡文件：可识别但无法参与锚定中转
+    expect(
+      parseTransitionClip(clip({ id: 'transition__none__01', state: TRANSITION_CLIP_STATE })),
+    ).toBeNull()
   })
 
   it('findTransitionClip matches only the exact endpoint pair', () => {
     const clips = [transitionClip('sit', 'stand'), transitionClip('stand', 'sit'), transitionClip('sit', 'lie')]
-    expect(findTransitionClip('sit', 'stand', clips)?.id).toBe('transition_sit_to_stand')
-    expect(findTransitionClip('stand', 'sit', clips)?.id).toBe('transition_stand_to_sit')
+    expect(findTransitionClip('sit', 'stand', clips)?.transition).toEqual({ from: 'sit', to: 'stand' })
+    expect(findTransitionClip('stand', 'sit', clips)?.transition).toEqual({ from: 'stand', to: 'sit' })
     expect(findTransitionClip('lie', 'sit', clips)).toBeUndefined()
+  })
+
+  it('导入向导端点命名经扫描推导后可被锚定中转查找到', () => {
+    // 回归：导入向导生成 transition_<from>_to_<to>__dir__NN 文件名，
+    // 扫描推导出 transition 字段后 findTransitionClip 必须命中
+    const scanned = [
+      clipFromFileName('transition_sit_to_stand__none__01.webm')!,
+      clipFromFileName('transition_lie_to_sit__none__01.webm')!,
+      clipFromFileName('transition_sit_to_stand__none__02.mp4')!,
+    ]
+    expect(scanned[0]).toMatchObject({
+      state: 'transition',
+      transition: { from: 'sit', to: 'stand' },
+      variant: 1,
+    })
+    // 同端点对多变体时取编号最小
+    expect(findTransitionClip('sit', 'stand', scanned)?.fileName).toBe(
+      'transition_sit_to_stand__none__01.webm',
+    )
+    expect(findTransitionClip('lie', 'sit', scanned)?.fileName).toBe(
+      'transition_lie_to_sit__none__01.webm',
+    )
+    expect(findTransitionClip('stand', 'sit', scanned)).toBeUndefined()
+  })
+
+  it('旧命名 transition_X_to_Y.webm 手工文件同样推导端点', () => {
+    const scanned = [clipFromFileName('transition_sit_to_stand.webm')!]
+    expect(scanned[0]).toMatchObject({ state: 'transition', transition: { from: 'sit', to: 'stand' } })
+    expect(findTransitionClip('sit', 'stand', scanned)?.fileName).toBe('transition_sit_to_stand.webm')
   })
 })
 

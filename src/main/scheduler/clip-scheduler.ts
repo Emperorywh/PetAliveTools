@@ -3,20 +3,26 @@
  *
  * 调度器只选择文件并等待渲染端的 ended 事件；它不读取视频时间、
  * 不修改播放速率、不镜像片段，也不根据视频内容移动窗口。
+ * 行走位移由外壳按墙钟恒速驱动（§7.3），不依赖媒体时间。
  */
 
 import type { ClipMeta } from '../../shared/types/clip-meta'
 import type { MicroRandomConfig, BehaviorConfig } from '../../shared/types/behavior-config'
 import type { Personality } from '../../shared/types/persona'
+import type { NeedsState } from '../../shared/types/needs-state'
+import { emotionCandidateGroups } from '../behavior/needs'
 import { BehaviorFsm, type BehaviorState } from '../behavior/fsm'
-import { selectClipForState, type VariantPicker } from '../behavior/state-lookup'
+import { selectClipForState, getClipVariants, type VariantPicker } from '../behavior/state-lookup'
 import {
   planStateTransition,
   resolveAnchorPose,
   ANCHOR_STATE,
+  clampPropFadeMs,
+  DEFAULT_PROP_FADE_MS,
   type AnchorPose,
   type PlanOptions,
   type TransitionPlan,
+  type TransitionStep,
 } from '../behavior/anchor-transition'
 import { isPlaceholderClip } from '../persistence/placeholder'
 import {
@@ -42,6 +48,9 @@ import {
   shuffleVariants,
 } from './randomization'
 
+/** 情绪动作插入的默认冷却时长 (ms)：同一情绪动作两次插入的最小间隔 */
+export const DEFAULT_EMOTION_COOLDOWN_MS = 180_000
+
 /**
  * 调度配置保留行为随机性和锚定中转。
  * 与视频画面、分辨率、轨迹和桌面位移有关的配置已经移除。
@@ -53,6 +62,10 @@ export interface ClipSchedulerConfig {
   readonly microRandom?: MicroRandomConfig
   readonly personality?: Personality
   readonly rareActions?: readonly string[]
+  /** 需求状态提供者：非空时按 §9.4 阈值插入情绪动作（讨食/喝水/开心/无聊/求玩） */
+  readonly needsProvider?: () => NeedsState | null
+  /** 情绪动作冷却时长 ms，缺省 DEFAULT_EMOTION_COOLDOWN_MS */
+  readonly emotionCooldownMs?: number
 }
 
 /**
@@ -86,6 +99,8 @@ export interface SchedulerState {
   readonly lastClip: ClipMeta | null
   readonly fsmState: BehaviorState
   readonly currentAnchor: AnchorPose
+  /** 当前朝向：walk/turn 片段方向驱动的连续朝向记忆（供行走位移方向使用） */
+  readonly facing: 'left' | 'right'
   readonly variantTracker: VariantTracker
   readonly idleUntilMs: number
   readonly showingPlaceholder: boolean
@@ -110,6 +125,8 @@ export class ClipScheduler {
   private state: SchedulerState
   private readonly variantDecks = new Map<string, ClipMeta[]>()
   private readonly lastPickedClip = new Map<string, string>()
+  /** 情绪动作冷却：state → 上次插入时刻 (ms) */
+  private readonly lastEmotionAtMs = new Map<string, number>()
 
   constructor(
     private readonly deps: ClipSchedulerDeps,
@@ -122,6 +139,7 @@ export class ClipScheduler {
       lastClip: null,
       fsmState: deps.fsm.state,
       currentAnchor: deps.fsm.anchor,
+      facing: 'right',
       variantTracker: createVariantTracker(),
       idleUntilMs: 0,
       showingPlaceholder: false,
@@ -294,6 +312,7 @@ export class ClipScheduler {
   /**
    * 规划下一个普通行为周期。
    * 微随机只保留变体、空闲时长与稀有动作，不再改变视频速率或位置。
+   * 插入优先级：稀有招牌动作 → 需求驱动的情绪动作 → FSM 概率转移。
    */
   private planNextCycle(nowMs: number): SchedulingCycle {
     const micro = this.config.microRandom
@@ -301,14 +320,17 @@ export class ClipScheduler {
       const probability = effectiveRareActionProbability(micro, this.config.personality)
       if (shouldInsertRareAction(probability, this.config.rng)) {
         const state = pickRareAction(this.config.rareActions ?? [], this.config.rng)
-        const rare = state ? this.planRareActionCycle(state, nowMs) : null
+        const rare = state ? this.planInsertedActionCycle(state, nowMs) : null
         if (rare) return rare
       }
     }
 
+    const emotion = this.planEmotionCycle(nowMs)
+    if (emotion) return emotion
+
     const fromState = this.state.fsmState
     const nextState = this.deps.fsm.step()
-    const targetClip = selectClipForState(nextState, this.deps.clips, this.createVariantPicker())
+    const targetClip = this.selectTargetClip(nextState)
     const isPlaceholder = isPlaceholderClip(targetClip)
     if (!isPlaceholder) {
       this.state = {
@@ -354,22 +376,94 @@ export class ClipScheduler {
   }
 
   /**
-   * 构造不推进 FSM 的稀有动作周期。
-   * 稀有动作也按原始片段完整播放。
+   * 按当前需求规划情绪动作周期 (§9.4 情绪表达)。
+   *
+   * 情绪动作（讨食/喝水/开心/无聊/求玩）不在 FSM 边表内，
+   * 在空闲调度点按需求阈值插入，带每动作冷却，避免同一情绪反复刷屏。
+   * 组内（如讨食/喝水）在有真实片段的候选中随机取一。
    */
-  private planRareActionCycle(rareState: string, nowMs: number): SchedulingCycle | null {
-    const targetClip = selectClipForState(rareState, this.deps.clips, this.createVariantPicker())
+  private planEmotionCycle(nowMs: number): SchedulingCycle | null {
+    const needs = this.config.needsProvider?.() ?? null
+    if (!needs) return null
+    const cooldownMs = this.config.emotionCooldownMs ?? DEFAULT_EMOTION_COOLDOWN_MS
+    for (const states of emotionCandidateGroups(needs)) {
+      const available = states.filter((state) => {
+        const last = this.lastEmotionAtMs.get(state) ?? -Infinity
+        if (nowMs - last < cooldownMs) return false
+        return getClipVariants(state, this.deps.clips).length > 0
+      })
+      if (available.length === 0) continue
+      const state = available[Math.floor(this.config.rng() * available.length)]!
+      const cycle = this.planInsertedActionCycle(state, nowMs)
+      if (cycle) {
+        this.lastEmotionAtMs.set(state, nowMs)
+        return cycle
+      }
+    }
+    return null
+  }
+
+  /**
+   * 为目标状态选择片段，带朝向连续性 (§9.5 方向变体)。
+   *
+   * walk / turn 优先选择与当前朝向同向的左右片段，使"转身后行走方向"
+   * 与画面一致；无同向片段时退回任意方向片段。选中带方向的片段后
+   * 朝向随之更新（转身片段无方向信息时翻转朝向）。
+   * 其余状态沿用变体洗牌选择器。
+   */
+  private selectTargetClip(state: string): ClipMeta {
+    if (state !== 'walk' && state !== 'turn') {
+      return selectClipForState(state, this.deps.clips, this.createVariantPicker())
+    }
+    const variants = getClipVariants(state, this.deps.clips)
+    if (variants.length === 0) return selectClipForState(state, this.deps.clips)
+    const directional = variants.filter((v) => v.direction === 'left' || v.direction === 'right')
+    let pool =
+      directional.length > 0
+        ? directional.filter((v) => v.direction === this.state.facing)
+        : variants
+    if (pool.length === 0) pool = directional
+    const picked = pool[Math.floor(this.config.rng() * pool.length)]!
+    if (picked.direction === 'left' || picked.direction === 'right') {
+      this.state = { ...this.state, facing: picked.direction }
+    } else if (state === 'turn') {
+      this.state = { ...this.state, facing: this.state.facing === 'left' ? 'right' : 'left' }
+    }
+    return picked
+  }
+
+  /**
+   * 构造不推进 FSM 的插入动作周期（稀有招牌 / 情绪表达共用）。
+   * 插入动作也按原始片段完整播放；道具类（sig_ 招牌）目标
+   * 追加 §8.4 淡出回锚定步骤。
+   */
+  private planInsertedActionCycle(state: string, nowMs: number): SchedulingCycle | null {
+    const targetClip = selectClipForState(state, this.deps.clips, this.createVariantPicker())
     if (isPlaceholderClip(targetClip)) return null
     const plan = planStateTransition(
       { state: this.state.fsmState, clip: this.state.lastClip },
-      { state: rareState, clip: targetClip },
+      { state, clip: targetClip },
       this.deps.clips,
       this.config.planOptions,
     )
+    const steps: readonly TransitionStep[] = targetClip.prop
+      ? [
+          ...plan.steps,
+          {
+            kind: 'fade_out',
+            role: 'return_to_anchor',
+            clip: targetClip,
+            durationMs: clampPropFadeMs(
+              this.config.planOptions.propFadeMs ?? DEFAULT_PROP_FADE_MS,
+            ),
+            holdPosition: true,
+          },
+        ]
+      : plan.steps
     return createSchedulingCycle({
       fromState: this.state.fsmState,
-      toState: rareState,
-      plan,
+      toState: state,
+      plan: { ...plan, steps },
       targetClip,
       nowMs,
       idleIntervalMs: 0,
@@ -527,6 +621,7 @@ export class ClipScheduler {
       lastClip: null,
       fsmState: this.deps.fsm.state,
       currentAnchor: this.deps.fsm.anchor,
+      facing: 'right',
       variantTracker: createVariantTracker(),
       idleUntilMs: nowMs,
       showingPlaceholder: false,

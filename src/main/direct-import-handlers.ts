@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import {
   clipFromFileName,
   isDirectVideoFile,
+  isValidDirectStateKey,
   makeDirectClipFileName,
   nextDirectClipVariant,
   videoExtension,
@@ -22,7 +23,6 @@ import {
 import type { AudioMeta } from '../shared/types/audio-meta'
 import type { ClipMeta } from '../shared/types/clip-meta'
 import type { ProjectData } from '../shared/types/project'
-import { findItemByState } from '../shared/shooting-list'
 import { validateAudioMetaArray } from '../shared/schemas'
 import {
   createDefaultPersona,
@@ -161,7 +161,7 @@ export async function copyClipDirectly(
   if (!path.isAbsolute(projectDir) || !path.isAbsolute(request.sourcePath)) {
     throw new Error('项目目录和源片段都必须使用绝对路径')
   }
-  if (!findItemByState(request.state)) throw new Error(`未知动作状态: ${request.state}`)
+  if (!isValidDirectStateKey(request.state)) throw new Error(`未知动作状态: ${request.state}`)
   if (!isDirectVideoFile(request.sourcePath)) {
     throw new Error(`该文件不能由 Electron 直接播放，且项目禁止转码: ${request.sourcePath}`)
   }

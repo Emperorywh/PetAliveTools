@@ -65,6 +65,8 @@ import {
   type ClipSchedulerDeps,
   type RenderCommand,
 } from './scheduler/clip-scheduler'
+import { WalkController } from './scheduler/walk-controller'
+import { currentItem } from './scheduler/lifecycle'
 import { SchedulerCommandDispatcher } from './dispatch/scheduler-dispatcher'
 import { clampWindowX, groundedWindowY } from '../shared/spatial'
 
@@ -104,6 +106,7 @@ let needsState: NeedsState = INITIAL_NEEDS
 let scheduler: ClipScheduler | null = null
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 let commandDispatcher: SchedulerCommandDispatcher | null = null
+let walkController: WalkController | null = null
 let projectClips: readonly ClipMeta[] = []
 let needRates: NeedRates = DEFAULT_NEED_RATES
 let loopStartMs = 0
@@ -171,6 +174,16 @@ async function bootstrap(): Promise<void> {
 
   // 3.5 启动时贴近底部 (§7.3：启动或显示器工作区变化时约束到可见区域并贴近底部)
   movePetToVisibleArea()
+
+  // 3.7 行走位移控制器 (§7.3 行走移动)：walk 片段播放期间按墙钟恒速平移窗口
+  walkController = new WalkController({
+    getWindow: () => mainWindow,
+    getWorkArea: () => {
+      const bounds = displayManager?.getBounds()
+      return bounds ?? { x: 0, y: 0, width: 0, height: 0 }
+    },
+    windowWidth: WINDOW_WIDTH,
+  })
 
   // 3.6 可见性变化时刷新托盘菜单的「隐藏/展示」标签 (§10)
   mainWindow.on('show', () => void refreshTrayMenu())
@@ -261,13 +274,18 @@ async function bootstrap(): Promise<void> {
         void persistNeedsState()
         refreshBehaviorWeights()
       },
-      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表 / §9.4)
+      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表 / §9.4)。
+      // 拖拽打搅不开心（happiness < 40）的宠物时，额外插入烦躁反应，
+      // 让 D 类情绪动作对交互也有回应。
       onInteractionNeeds: (interaction) => {
         const delta = INTERACTION_NEED_DELTAS[interaction]
         if (!delta) return
         needsState = applyNeedDelta(needsState, delta)
         void persistNeedsState()
         refreshBehaviorWeights()
+        if (interaction === 'dragged' && needsState.happiness < 40 && resolveRealClip('annoyed')) {
+          preemptAction('annoyed')
+        }
       },
     },
     { windowWidth: WINDOW_WIDTH, windowHeight: WINDOW_HEIGHT },
@@ -292,17 +310,22 @@ async function bootstrap(): Promise<void> {
 function trayCallbacks(): TrayMenuCallbacks {
   return {
     onFeed: () => {
-      // GAP-005/IR-010：传递真实片段上下文（占位片段视为无片段，走默认映射）
-      audioCoordinator?.onActionTriggered('eat', resolveRealClip('eat'))
+      // 喂食 → 讨食片段（D 类），需求饥饿↓愉悦↑；无片段时仅需求生效
+      preemptAction('beg_food')
       needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
       void persistNeedsState()
       refreshBehaviorWeights()
     },
     onToy: () => {
-      audioCoordinator?.onActionTriggered('play', resolveRealClip('play'))
+      // 给玩具 → 求玩片段（D 类），需求愉悦↑注意力↑
+      preemptAction('want_play')
       needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
       void persistNeedsState()
       refreshBehaviorWeights()
+    },
+    onCall: () => {
+      // 呼唤宠物 → 被呼唤转身片段（B 类）
+      preemptAction('called')
     },
     onToggleMute: async () => {
       const muted = audioCoordinator?.toggleMute() ?? false
@@ -449,6 +472,9 @@ async function initScheduler(): Promise<void> {
 async function rebuildScheduler(data: ProjectData): Promise<void> {
   if (!displayManager) return
 
+  // 换宠物/重建调度器时终止进行中的行走位移
+  walkController?.stop()
+
   projectClips = data.clips
 
   // 注入音频素材库 (§11.1)：在 bootstrap 与 profile 切换时把 loadProject 得到的 AudioMeta[] 注入协调器
@@ -515,6 +541,8 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
     microRandom: data.behaviorConfig.microRandom,
     personality,
     rareActions,
+    // §9.4 情绪表达：需求高位/低位时插入讨食/喝水/开心/无聊/求玩片段
+    needsProvider: () => needsState,
   }
 
   scheduler = new ClipScheduler(deps, config)
@@ -587,10 +615,46 @@ function startSchedulerTick(): void {
  * - idle → 锚定片段保活重播
  * - play 携带真实片段触发动作声
  *
- * 本链路不会产生窗口位置命令或视频处理参数。
+ * 渲染载荷不包含窗口坐标；行走位移由主进程的 WalkController
+ * 按墙钟恒速执行（§7.3），不依赖媒体时间。
  */
 function processSchedulerCommands(commands: readonly RenderCommand[]): void {
   commandDispatcher?.dispatch(commands)
+  syncWalkMotion()
+}
+
+/**
+ * 同步行走位移 (§7.3 行走移动)：调度器当前正在播放 walk 片段时
+ * 按片段方向（无方向标记时用朝向记忆）恒速平移窗口，否则停止。
+ * 每次命令分发后调用；周期完成、交互抢占与用户拖拽都会经此停止位移。
+ */
+function syncWalkMotion(): void {
+  if (!walkController) return
+  const snap = scheduler?.snapshot
+  const item = snap?.cycle ? currentItem(snap.cycle.queue) : null
+  const walkClip = item?.kind === 'play' ? item.clip : null
+  if (walkClip && walkClip.state === 'walk') {
+    walkController.start(walkClip.direction !== 'none' ? walkClip.direction : snap!.facing)
+  } else {
+    walkController.stop()
+  }
+}
+
+/**
+ * 以交互抢占方式触发一个动作状态（托盘/菜单/需求反应入口共用）。
+ * 播放命令走与 tick 循环相同的分发链路；循环目标片段记录轮换起点。
+ */
+function preemptAction(state: string): void {
+  if (!scheduler) return
+  const nowMs = Date.now()
+  const result = scheduler.preempt(state, nowMs)
+  processSchedulerCommands(result.commands)
+  audioCoordinator?.onActionTriggered(state, result.state.cycle?.targetClip ?? null)
+  for (const cmd of result.commands) {
+    if ((cmd.kind === 'play' || cmd.kind === 'fade_in') && cmd.clip?.loop) {
+      loopStartMs = nowMs
+    }
+  }
 }
 
 /** 停止调度器 tick 循环 */
@@ -874,6 +938,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   stopSchedulerTick()
+  walkController?.dispose()
   hotkeyManager?.dispose()
   screenManager?.dispose()
   displayManager?.dispose()

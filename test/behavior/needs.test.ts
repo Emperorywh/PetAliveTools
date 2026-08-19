@@ -8,6 +8,10 @@ import {
   applyNeedDelta,
   getHighNeeds,
   needWeightModifiers,
+  emotionCandidateGroups,
+  EMOTION_HIGH_THRESHOLD,
+  EMOTION_LOW_THRESHOLD,
+  EMOTION_HAPPY_THRESHOLD,
   type NeedRates,
 } from '../../src/main/behavior/needs'
 import type { NeedsState } from '../../src/shared/types/needs-state'
@@ -180,11 +184,12 @@ describe('needWeightModifiers (§9.3 need-driven transition)', () => {
     expect(Object.keys(mods)).toHaveLength(0)
   })
 
-  it('boosts beg_food when hunger is high', () => {
-    const state: NeedsState = { hunger: 90, fatigue: 20, happiness: 70, attention: 70 }
+  it('情绪动作（beg_food/bored/want_play）不在边表内，不再产生无效权重倍率', () => {
+    // 回归：这些状态不在 FSM 边表中，倍率无法造边，只会被静默忽略；
+    // 情绪表达改由调度器的 emotionCandidateGroups 插入路径触发。
+    const state: NeedsState = { hunger: 90, fatigue: 20, happiness: 10, attention: 10 }
     const mods = needWeightModifiers(state)
-    expect(mods['idle_sit']).toBeDefined()
-    expect(mods['idle_sit']['beg_food']).toBeGreaterThan(1)
+    expect(mods['idle_sit']).toBeUndefined()
   })
 
   it('boosts sleep when fatigue is high', () => {
@@ -194,21 +199,36 @@ describe('needWeightModifiers (§9.3 need-driven transition)', () => {
     expect(mods['lie']['sleep']).toBeGreaterThan(1)
   })
 
-  it('boosts bored when happiness is low', () => {
-    const state: NeedsState = { hunger: 20, fatigue: 20, happiness: 20, attention: 70 }
-    const mods = needWeightModifiers(state)
-    expect(mods['idle_sit']['bored']).toBeGreaterThan(1)
+  it('increases sleep modifier with fatigue severity', () => {
+    const low = needWeightModifiers({ hunger: 20, fatigue: 60, happiness: 70, attention: 70 })
+    const high = needWeightModifiers({ hunger: 20, fatigue: 95, happiness: 70, attention: 70 })
+    expect(high['idle_sit']['sleep']).toBeGreaterThan(low['idle_sit']['sleep'])
+  })
+})
+
+describe('emotionCandidateGroups (§9.4 情绪表达插入)', () => {
+  it('中性需求不产生情绪候选', () => {
+    const state: NeedsState = { hunger: 30, fatigue: 20, happiness: 70, attention: 70 }
+    expect(emotionCandidateGroups(state)).toEqual([])
   })
 
-  it('boosts want_play when attention is low', () => {
-    const state: NeedsState = { hunger: 20, fatigue: 20, happiness: 70, attention: 20 }
-    const mods = needWeightModifiers(state)
-    expect(mods['idle_sit']['want_play']).toBeGreaterThan(1)
+  it('饥饿高位 → 讨食/喝水候选组', () => {
+    const state: NeedsState = { hunger: EMOTION_HIGH_THRESHOLD, fatigue: 20, happiness: 70, attention: 70 }
+    expect(emotionCandidateGroups(state)).toEqual([['beg_food', 'drink']])
   })
 
-  it('increases modifier with need severity', () => {
-    const low = needWeightModifiers({ hunger: 60, fatigue: 20, happiness: 70, attention: 70 })
-    const high = needWeightModifiers({ hunger: 95, fatigue: 20, happiness: 70, attention: 70 })
-    expect(high['idle_sit']['beg_food']).toBeGreaterThan(low['idle_sit']['beg_food'])
+  it('愉悦极高 → 开心候选', () => {
+    const state: NeedsState = { hunger: 20, fatigue: 20, happiness: EMOTION_HAPPY_THRESHOLD, attention: 70 }
+    expect(emotionCandidateGroups(state)).toEqual([['happy']])
+  })
+
+  it('愉悦低位 → 无聊；注意力低位 → 求玩（按优先级排序）', () => {
+    const state: NeedsState = { hunger: 20, fatigue: 20, happiness: EMOTION_LOW_THRESHOLD, attention: EMOTION_LOW_THRESHOLD }
+    expect(emotionCandidateGroups(state)).toEqual([['bored'], ['want_play']])
+  })
+
+  it('支持自定义阈值', () => {
+    const state: NeedsState = { hunger: 50, fatigue: 20, happiness: 70, attention: 70 }
+    expect(emotionCandidateGroups(state, { high: 50 })).toEqual([['beg_food', 'drink']])
   })
 })
