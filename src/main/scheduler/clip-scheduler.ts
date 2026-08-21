@@ -391,9 +391,10 @@ export class ClipScheduler {
   /**
    * 为目标状态选择片段，带朝向连续性 (§9.5 方向变体)。
    *
-   * walk / turn 优先选择与当前朝向同向的左右片段，使"转身后行走方向"
-   * 与画面一致；无同向片段时退回任意方向片段。选中带方向的片段后
-   * 朝向随之更新（转身片段无方向信息时翻转朝向）。
+   * walk 优先选择与当前朝向同向的左右片段；turn 片段以转身后的目标
+   * 朝向命名（SHOOTING.md §5），优先选择与当前朝向异向的片段，使
+   * "转身后行走方向"与画面一致。无对应方向片段时退回任意方向片段。
+   * 选中带方向的片段后朝向随之更新（转身片段无方向信息时翻转朝向）。
    * 其余状态沿用变体洗牌选择器。
    */
   private selectTargetClip(state: string): ClipMeta {
@@ -403,10 +404,11 @@ export class ClipScheduler {
     const variants = getClipVariants(state, this.deps.clips)
     if (variants.length === 0) return selectClipForState(state, this.deps.clips)
     const directional = variants.filter((v) => v.direction === 'left' || v.direction === 'right')
+    // 转身片段以转身后的朝向命名，须选异向片段才能翻转朝向；行走沿用当前朝向
+    const preferred =
+      state === 'turn' ? (this.state.facing === 'left' ? 'right' : 'left') : this.state.facing
     let pool =
-      directional.length > 0
-        ? directional.filter((v) => v.direction === this.state.facing)
-        : variants
+      directional.length > 0 ? directional.filter((v) => v.direction === preferred) : variants
     if (pool.length === 0) pool = directional
     const picked = pool[Math.floor(this.config.rng() * pool.length)]!
     if (picked.direction === 'left' || picked.direction === 'right') {

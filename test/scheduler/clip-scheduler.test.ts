@@ -329,6 +329,56 @@ describe('行走朝向连续性 (§9.5 方向变体)', () => {
     expect(instance.snapshot.facing).toBe('left')
   })
 
+  it('左右转身片段齐备时转身选择异向片段，朝向随转身往复翻转', () => {
+    const clips = [
+      clip('idle_sit__none__01', 'idle_sit', true),
+      clip('stand__none__01', 'stand'),
+      dclip('walk__left__01', 'walk', 'left'),
+      dclip('walk__right__01', 'walk', 'right'),
+      dclip('turn__left__01', 'turn', 'left'),
+      dclip('turn__right__01', 'turn', 'right'),
+    ]
+    // FSM 随机源循环 [0.5, 0.9, 0.9, 0]：stand→walk、walk→turn、turn→walk
+    let draw = 0
+    const seq = [0.5, 0.9, 0.9, 0]
+    const instance = facingScheduler(() => seq[draw++ % seq.length] ?? 0, clips)
+
+    // 周期 1：idle_sit → stand
+    runCycle(instance, 0)
+
+    // 周期 2：stand → walk。初始朝向 right → 选向右片段
+    runCycle(instance, 10_000)
+    expect(instance.snapshot.fsmState).toBe('walk')
+    expect(instance.snapshot.lastClip?.direction).toBe('right')
+
+    // 周期 3：walk → turn。朝向 right → 应选异向 turn__left 翻转朝向
+    runCycle(instance, 20_000)
+    expect(instance.snapshot.fsmState).toBe('turn')
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+    expect(instance.snapshot.facing).toBe('left')
+
+    // 周期 4：turn → walk。朝向 left → 选向左片段
+    runCycle(instance, 30_000)
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+
+    // 周期 5：walk → stand（0.5*5=2.5 → stand）
+    runCycle(instance, 40_000)
+
+    // 周期 6：stand → walk。朝向 left → 选向左片段
+    runCycle(instance, 50_000)
+    expect(instance.snapshot.lastClip?.direction).toBe('left')
+
+    // 周期 7：walk → turn。朝向 left → 应选异向 turn__right 再度翻转
+    runCycle(instance, 60_000)
+    expect(instance.snapshot.fsmState).toBe('turn')
+    expect(instance.snapshot.lastClip?.direction).toBe('right')
+    expect(instance.snapshot.facing).toBe('right')
+
+    // 周期 8：turn → walk。朝向 right → 选向右片段
+    runCycle(instance, 70_000)
+    expect(instance.snapshot.lastClip?.direction).toBe('right')
+  })
+
   it('无同向片段时退回任意方向片段', () => {
     const clips = [
       clip('idle_sit__none__01', 'idle_sit', true),
