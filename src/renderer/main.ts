@@ -8,6 +8,7 @@
 import { SpritePlayer } from './sprite/video-player'
 import { mountImportWizard } from './import-wizard'
 import { mountSettingsPanel } from './settings'
+import { mountContextMenu } from './context-menu'
 import { InteractionHandler } from './input/interaction'
 import { AudioPlayer } from './audio'
 import { DEFAULT_AUDIO_VOLUME } from '../shared/audio'
@@ -36,6 +37,11 @@ function bootstrap(): void {
   }
   if (window.location.hash === '#settings') {
     window.__settingsPanel = mountSettingsPanel(app)
+    return
+  }
+  // 右键菜单窗口（hash 携带 ?muted= 查询参数，startsWith 兼容）
+  if (window.location.hash.startsWith('#context-menu')) {
+    mountContextMenu(app)
     return
   }
 
@@ -173,6 +179,11 @@ function bootstrap(): void {
   document.addEventListener('mousedown', (event) => interaction.handleMouseDown(event))
   document.addEventListener('mouseup', (event) => interaction.handleMouseUp(event))
   document.addEventListener('contextmenu', (event) => interaction.handleContextMenu(event))
+
+  // 就绪握手：全部监听器注册完毕才通知主进程开始下发调度命令。
+  // 主进程的 webContents.send 不缓冲消息，若早于此处注册监听器，
+  // 首个播放指令会在启动竞态中丢失，宠物窗口将保持透明（§13）。
+  schedulerBridge?.notifyReady()
 
   window.__spritePlayer = player
   window.__interaction = interaction

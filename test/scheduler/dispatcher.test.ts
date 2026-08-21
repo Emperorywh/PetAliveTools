@@ -118,3 +118,83 @@ describe('原样片段命令分发', () => {
     expect(send).not.toHaveBeenCalled()
   })
 })
+
+describe('渲染层就绪握手重放', () => {
+  it('从未发送过播放载荷时重放为无操作', () => {
+    const { win, send } = fakeWindow()
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => 'C:\\pets\\mimi',
+    })
+
+    dispatcher.replayToRenderer()
+
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('重放最近一次播放载荷（启动竞态丢消息与整页重载恢复）', () => {
+    const { win, send } = fakeWindow()
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => 'C:\\pets\\mimi',
+    })
+
+    dispatcher.dispatch([{ kind: 'play', clip: clip(), loop: false }])
+    send.mockClear()
+    dispatcher.replayToRenderer()
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith('scheduler:play', expect.objectContaining({
+      clipId: 'idle_sit__none__01',
+    }))
+  })
+
+  it('空闲保活与淡入同样更新重放载荷', () => {
+    const now = 10_000
+    const { win, send } = fakeWindow()
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => 'C:\\pets\\mimi',
+      now: () => now,
+    })
+
+    dispatcher.dispatch([{ kind: 'idle', clip: clip(), intervalMs: 5_000 }])
+    send.mockClear()
+    dispatcher.replayToRenderer()
+    expect(send).toHaveBeenCalledWith('scheduler:play', expect.objectContaining({
+      clipId: 'idle_sit__none__01',
+    }))
+
+    dispatcher.dispatch([{ kind: 'fade_in', clip: clip({ id: 'sig_x__none__01' }), durationMs: 200 }])
+    send.mockClear()
+    dispatcher.replayToRenderer()
+    expect(send).toHaveBeenCalledWith('scheduler:play', expect.objectContaining({
+      clipId: 'sig_x__none__01',
+    }))
+  })
+
+  it('占位片段不会成为重放载荷', () => {
+    const { win, send } = fakeWindow()
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => 'C:\\pets\\mimi',
+    })
+
+    dispatcher.dispatch([{ kind: 'play', clip: createPlaceholderClip(), loop: true }])
+    dispatcher.replayToRenderer()
+
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('窗口已销毁时不重放', () => {
+    const win = { isDestroyed: () => true, webContents: { send: vi.fn() } } as unknown as BrowserWindow
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => 'C:\\pets\\mimi',
+    })
+
+    dispatcher.replayToRenderer()
+
+    expect(win.webContents.send).not.toHaveBeenCalled()
+  })
+})

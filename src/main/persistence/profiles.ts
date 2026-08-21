@@ -21,8 +21,10 @@ import {
   createProject,
   createDefaultPersona,
   getProjectPaths,
+  tryReadNeedsState,
   validateProject,
 } from './project-io'
+import { writeJsonAtomic } from './atomic-write'
 
 /** 单个 profile 的摘要信息 */
 export interface ProfileSummary {
@@ -76,10 +78,10 @@ async function readRegistry(registryPath: string): Promise<ProfileRegistry> {
   return { activeProfileId: null }
 }
 
-/** 写入注册表 */
+/** 写入注册表（原子写：进程被杀不会留下截断的半截文件） */
 async function writeRegistry(registryPath: string, registry: ProfileRegistry): Promise<void> {
   await fs.mkdir(path.dirname(registryPath), { recursive: true })
-  await fs.writeFile(registryPath, JSON.stringify(registry, null, 2), 'utf-8')
+  await writeJsonAtomic(registryPath, registry)
 }
 
 /**
@@ -309,22 +311,24 @@ export class ProfileManager {
 /**
  * 读取 profile 项目目录中的 needs-state.json。
  *
- * 文件缺失或无效时返回默认需求状态（不抛错——崩溃恢复场景 §13）。
+ * 文件缺失或无效时返回默认需求状态（不抛错——崩溃恢复场景 §13），
+ * 并尽力把默认值回写磁盘，修复被写坏的文件（如进程退出时的 0 字节截断）。
  */
 export async function loadNeedsStateOrDefault(projectDir: string): Promise<NeedsState> {
   const paths = getProjectPaths(projectDir)
+  const state = await tryReadNeedsState(paths.needsState)
+  if (state !== null) return state
+
+  const fallback = defaultNeedsState()
   try {
-    const raw = JSON.parse(await fs.readFile(paths.needsState, 'utf-8'))
-    if (validateNeedsState(raw).length === 0) {
-      return raw as NeedsState
-    }
+    await saveNeedsState(projectDir, fallback)
   } catch {
-    // 缺失/损坏 → 默认值
+    /* 回写失败不阻塞启动，下次保存自然修复 */
   }
-  return defaultNeedsState()
+  return fallback
 }
 
-/** 将需求状态写入 profile 项目目录（写前验证） */
+/** 将需求状态写入 profile 项目目录（写前验证，原子落盘） */
 export async function saveNeedsState(projectDir: string, state: NeedsState): Promise<void> {
   const errors = validateNeedsState(state)
   if (errors.length > 0) {
@@ -332,7 +336,7 @@ export async function saveNeedsState(projectDir: string, state: NeedsState): Pro
   }
   const paths = getProjectPaths(projectDir)
   await fs.mkdir(projectDir, { recursive: true })
-  await fs.writeFile(paths.needsState, JSON.stringify(state, null, 2), 'utf-8')
+  await writeJsonAtomic(paths.needsState, state)
 }
 
 async function exists(p: string): Promise<boolean> {

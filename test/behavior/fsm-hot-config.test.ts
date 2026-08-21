@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { BehaviorFsm } from '../../src/main/behavior/fsm'
-import { applyNeedDelta, INTERACTION_NEED_DELTAS } from '../../src/main/behavior/needs'
+import { applyNeedDelta } from '../../src/main/behavior/needs'
 import type { BehaviorConfig } from '../../src/shared/types/behavior-config'
 import type { NeedsState } from '../../src/shared/types/needs-state'
 
@@ -49,29 +49,34 @@ describe('BehaviorFsm.updateConfig (IR-007 权重热更新)', () => {
   })
 })
 
-describe('INTERACTION_NEED_DELTAS (IR-008 交互需求反馈)', () => {
+describe('applyNeedDelta (菜单动作需求反馈)', () => {
   const base: NeedsState = { hunger: 50, fatigue: 50, happiness: 50, attention: 50 }
 
-  it('抚摸 → 愉悦↑ (§10)', () => {
-    const next = applyNeedDelta(base, INTERACTION_NEED_DELTAS['petted']!)
-    expect(next.happiness).toBe(58)
+  it('喂食 → 饥饿↓愉悦↑', () => {
+    const next = applyNeedDelta(base, { hunger: -40, happiness: 10 })
+    expect(next.hunger).toBe(10)
+    expect(next.happiness).toBe(60)
   })
 
-  it('点击 → 注意力↑ (§10)', () => {
-    const next = applyNeedDelta(base, INTERACTION_NEED_DELTAS['clicked']!)
-    expect(next.attention).toBe(60)
+  it('给玩具 → 愉悦↑注意力↑', () => {
+    const next = applyNeedDelta(base, { happiness: 20, attention: 20, fatigue: 5 })
+    expect(next.happiness).toBe(70)
+    expect(next.attention).toBe(70)
   })
 
-  it('拖拽 → 愉悦小幅↓ (§10)', () => {
-    const next = applyNeedDelta(base, INTERACTION_NEED_DELTAS['dragged']!)
-    expect(next.happiness).toBe(47)
+  it('喝水 → 轻度缓解饥饿、愉悦小幅↑（需求模型无口渴维度）', () => {
+    const next = applyNeedDelta(base, { hunger: -10, happiness: 5 })
+    expect(next.hunger).toBe(40)
+    expect(next.happiness).toBe(55)
   })
 
   it('增量越过边界时钳制到 [0, 100]', () => {
     const high: NeedsState = { hunger: 50, fatigue: 50, happiness: 97, attention: 95 }
-    const next = applyNeedDelta(high, INTERACTION_NEED_DELTAS['petted']!)
+    const next = applyNeedDelta(high, { happiness: 10, attention: 10 })
     expect(next.happiness).toBe(100)
-    const low: NeedsState = { hunger: 50, fatigue: 50, happiness: 1, attention: 50 }
-    expect(applyNeedDelta(low, INTERACTION_NEED_DELTAS['dragged']!).happiness).toBe(0)
+    expect(next.attention).toBe(100)
+    const low: NeedsState = { hunger: 0, fatigue: 50, happiness: 1, attention: 50 }
+    expect(applyNeedDelta(low, { hunger: -30, happiness: -3 }).hunger).toBe(0)
+    expect(applyNeedDelta(low, { hunger: -30, happiness: -3 }).happiness).toBe(0)
   })
 })

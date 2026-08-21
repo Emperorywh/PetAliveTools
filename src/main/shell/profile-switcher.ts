@@ -2,16 +2,17 @@
  * 托盘 Profile 切换器 (§12.2)
  *
  * 负责：
- * - 构建托盘菜单模板（含宠物列表、切换、导入/导出、删除）——纯函数
+ * - 托盘菜单回调契约（TrayMenuCallbacks，含宠物切换、导入/导出、删除）
  * - 编排 profile 操作（切换/导出/导入/删除）并通知宿主刷新运行时状态
+ *
+ * 托盘菜单 UI 由自定义 HTML 菜单窗口呈现（input/context-menu 控制器），
+ * 本模块不再构建原生菜单模板。
  *
  * 本模块不依赖 Electron 运行时（对话框通过 FileDialogs 注入），
  * 可在 vitest node 环境下直接单元测试。
  *
  * 运行于主进程。
  */
-
-import type { MenuItemConstructorOptions } from 'electron'
 
 import type { ProfileSummary } from '../persistence/profiles'
 import { ProfileManager } from '../persistence/profiles'
@@ -22,22 +23,26 @@ import {
   type ImportResult,
 } from '../persistence/backup'
 
-/** 托盘菜单回调（由外壳接线） */
+/** 托盘菜单回调（由外壳接线，自定义菜单窗口按动作回传执行） */
 export interface TrayMenuCallbacks {
   /** 喂食（触发 beg_food 讨食片段，D 类，饥饿↓） */
   onFeed: () => void
   /** 给玩具（触发 want_play 求玩片段，D 类，愉悦↑） */
   onToy: () => void
+  /** 喂水（触发 drink 喝水片段，D 类；需求模型无口渴维度，轻度缓解饥饿） */
+  onDrink: () => void
   /** 呼唤宠物（触发 called 被呼唤转身片段，B 类） */
   onCall: () => void
   /** 切换静音 (§11.2) */
   onToggleMute: () => void
-  /** 暂时隐藏（安全阀的另一入口，§10） */
+  /** 暂时隐藏/展示（安全阀的另一入口，§10） */
   onToggleHide: () => void
   /** 设置面板 (§12.4) */
   onSettings: () => void
   /** 关于 */
   onAbout: () => void
+  /** 退出应用（托盘菜单唯一常驻退出入口） */
+  onQuit: () => void
   /** 切换活跃宠物 (§12.2) */
   onSwitchProfile: (id: string) => void
   /** 从 zip 导入宠物 (§12.3) */
@@ -48,6 +53,8 @@ export interface TrayMenuCallbacks {
   onDeleteProfile: (id: string) => void
   /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
   onImportWizard: () => void
+  /** 托盘右键 → 打开自定义托盘菜单（外壳负责收集状态并弹菜单窗口） */
+  onOpenMenu: () => void
 }
 
 /** 托盘菜单状态 */
@@ -62,92 +69,6 @@ export interface TrayMenuState {
   readonly isPetVisible: boolean
 }
 
-/**
- * 构建托盘菜单的宠物管理区段 (§12.2、§12.3)。
- *
- * 切换子菜单使用 radio 项表达「同一时刻只有一只」；
- * 仅剩一只宠物时禁用删除，保证运行时始终有活跃宠物。
- *
- * @param profiles 全部 profile
- * @param activeProfileId 活跃 profile 标识
- * @param callbacks 菜单回调
- */
-export function buildProfileMenuSection(
-  profiles: readonly ProfileSummary[],
-  activeProfileId: string | null,
-  callbacks: Pick<
-    TrayMenuCallbacks,
-    'onSwitchProfile' | 'onImportProfile' | 'onExportProfile' | 'onDeleteProfile'
-  >,
-): MenuItemConstructorOptions[] {
-  const switchItems: MenuItemConstructorOptions[] =
-    profiles.length === 0
-      ? [{ label: '暂无宠物', enabled: false }]
-      : profiles.map((p) => ({
-          label: p.name,
-          type: 'radio' as const,
-          checked: p.id === activeProfileId,
-          click: () => callbacks.onSwitchProfile(p.id),
-        }))
-
-  const active = profiles.find((p) => p.id === activeProfileId) ?? null
-  const canDelete = profiles.length > 1
-
-  return [
-    {
-      label: '切换宠物',
-      submenu: switchItems,
-    },
-    {
-      label: active ? `导出「${active.name}」…` : '导出宠物…',
-      enabled: active !== null,
-      click: () => callbacks.onExportProfile(),
-    },
-    {
-      label: '导入宠物…',
-      click: () => callbacks.onImportProfile(),
-    },
-    {
-      label: '删除宠物',
-      enabled: canDelete,
-      submenu: profiles.map((p) => ({
-        label: p.name,
-        enabled: canDelete,
-        click: () => callbacks.onDeleteProfile(p.id),
-      })),
-    },
-  ]
-}
-
-/**
- * 构建完整托盘菜单模板（§10、§12.2、§12.3、§12.4）。
- *
- * 纯函数：只依赖传入状态与回调，可在单元测试中断言结构。
- *
- * @param state 菜单状态
- * @param callbacks 菜单回调
- */
-export function buildTrayTemplate(
-  state: TrayMenuState,
-  callbacks: TrayMenuCallbacks,
-): MenuItemConstructorOptions[] {
-  return [
-    { label: '喂食', click: () => callbacks.onFeed() },
-    { label: '给玩具', click: () => callbacks.onToy() },
-    { label: '呼唤', click: () => callbacks.onCall() },
-    { label: state.isMuted ? '取消静音' : '静音', click: () => callbacks.onToggleMute() },
-    { type: 'separator' },
-    { label: '导入片段…', click: () => callbacks.onImportWizard() },
-    { type: 'separator' },
-    ...buildProfileMenuSection(state.profiles, state.activeProfileId, callbacks),
-    { type: 'separator' },
-    { label: state.isPetVisible ? '隐藏' : '展示', click: () => callbacks.onToggleHide() },
-    { label: '设置', click: () => callbacks.onSettings() },
-    { type: 'separator' },
-    { label: '关于', click: () => callbacks.onAbout() },
-    { label: '退出', role: 'quit' },
-  ]
-}
 
 // ── Profile 操作编排 ── //
 

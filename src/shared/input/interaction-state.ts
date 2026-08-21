@@ -1,14 +1,16 @@
 /**
  * 交互状态机 (§10 交互层)
  *
- * 管理鼠标交互的检测与抢占输出：
- *   - 抚摸：光标进入命中盒并移动 → 抢占 petted (§10)
- *   - 点击/双击：点击身体 → 抢占 clicked (§10)
- *   - 拖拽：按住身体拖动 → 抢占 dragged (§7.5)
+ * 管理鼠标交互的检测与输出：
+ *   - 点击/双击：不再触发任何抢占，仅结束按压
+ *   - 拖拽：按住身体拖动 → 窗口跟随光标 (§7.5)
  *   - 模式切换：光标进入/离开缓冲带 → 切换 setIgnoreMouseEvents (§6.1)
  *
+ * 交互不切换视频片段：悬停、点击、拖拽都不抢占调度器，
+ * 调度器按自身节律继续播放行为片段。
+ *
  * 纯状态机：输入 = 鼠标事件 + 上下文（命中盒/缓冲带/阈值），
- * 输出 = 动作列表（进入交互态/退出交互态/抢占/结束抢占/拖拽位移）。
+ * 输出 = 动作列表（进入交互态/退出交互态/拖拽位移/拖拽结束）。
  * 调用方（渲染进程）负责将动作通过 IPC 路由到主进程。
  *
  * 纯计算，无平台依赖。
@@ -17,22 +19,16 @@
 import type { PixelRect } from './hitbox'
 import { isPointInHitbox, isPointInBufferZone } from './hitbox'
 
-// —— 交互类型 —— //
-
-/** 交互抢占目标状态 (§9.1 互动响应) */
-export type InteractionType = 'petted' | 'clicked' | 'dragged'
-
 // —— 状态机阶段 —— //
 
 /**
  * 交互阶段：
  * - idle：光标在缓冲带外，窗口穿透态
- * - hover：光标在缓冲带内，窗口交互态，等待交互
- * - petting：光标在命中盒内并移动 → 抢占 petted
+ * - hover：光标在缓冲带内，窗口交互态，等待按下
  * - pressing：鼠标按下命中盒，判定点击 vs 拖拽
- * - dragging：拖拽进行中 → 抢占 dragged
+ * - dragging：拖拽进行中，窗口跟随光标
  */
-export type InteractionPhase = 'idle' | 'hover' | 'petting' | 'pressing' | 'dragging'
+export type InteractionPhase = 'idle' | 'hover' | 'pressing' | 'dragging'
 
 // —— 输入事件 —— //
 
@@ -48,9 +44,8 @@ export type MouseInputEvent =
 export type InteractionAction =
   | { readonly kind: 'enter_interactive' }
   | { readonly kind: 'exit_interactive' }
-  | { readonly kind: 'preempt'; readonly interaction: InteractionType }
-  | { readonly kind: 'end_preempt' }
   | { readonly kind: 'drag_move'; readonly x: number; readonly y: number }
+  | { readonly kind: 'drag_end' }
 
 /** 处理结果 */
 export interface InteractionResult {
@@ -68,14 +63,10 @@ export interface InteractionState {
   readonly cursorX: number
   /** 光标 y（窗口局部坐标） */
   readonly cursorY: number
-  /** 命中盒内累积移动距离（用于抚摸检测，§10） */
-  readonly moveAccum: number
   /** 鼠标按下位置 x（用于拖拽/点击区分） */
   readonly pressX: number | null
   /** 鼠标按下位置 y（用于拖拽/点击区分） */
   readonly pressY: number | null
-  /** 当前活跃的抢占类型 */
-  readonly activePreempt: InteractionType | null
 }
 
 // —— 上下文 —— //
@@ -86,14 +77,11 @@ export interface InteractionContext {
   readonly hitboxPx: PixelRect
   /** 缓冲带像素 (§6.1: 8–12px) */
   readonly bufferPx: number
-  /** 抚摸触发移动阈值（累积像素） */
-  readonly pettingMoveThreshold: number
   /** 拖拽触发移动阈值（距按下点的像素） */
   readonly dragMoveThreshold: number
 }
 
 /** 默认阈值 */
-export const DEFAULT_PETTING_MOVE_THRESHOLD = 3
 export const DEFAULT_DRAG_MOVE_THRESHOLD = 5
 
 // —— 工厂 —— //
@@ -104,10 +92,8 @@ export function createInteractionState(): InteractionState {
     phase: 'idle',
     cursorX: 0,
     cursorY: 0,
-    moveAccum: 0,
     pressX: null,
     pressY: null,
-    activePreempt: null,
   }
 }
 
@@ -116,7 +102,7 @@ export function createInteractionState(): InteractionState {
  *
  * 未提供（undefined）的字段回落到默认值：可选配置经对象展开合并时，
  * 显式 undefined 会覆盖默认值，导致 `dist >= undefined` 恒为 false、
- * 抚摸/拖拽永不触发，因此这里逐字段取值。
+ * 拖拽永不触发，因此这里逐字段取值。
  */
 export function createInteractionContext(
   hitboxPx: PixelRect,
@@ -125,8 +111,6 @@ export function createInteractionContext(
   return {
     hitboxPx,
     bufferPx: overrides?.bufferPx ?? 10,
-    pettingMoveThreshold:
-      overrides?.pettingMoveThreshold ?? DEFAULT_PETTING_MOVE_THRESHOLD,
     dragMoveThreshold: overrides?.dragMoveThreshold ?? DEFAULT_DRAG_MOVE_THRESHOLD,
   }
 }
@@ -157,8 +141,6 @@ export function processInput(
       return handleIdle(state, event, ctx)
     case 'hover':
       return handleHover(state, event, ctx)
-    case 'petting':
-      return handlePetting(state, event, ctx)
     case 'pressing':
       return handlePressing(state, event, ctx)
     case 'dragging':
@@ -187,7 +169,6 @@ function handleIdle(
       phase: 'hover',
       cursorX: event.x,
       cursorY: event.y,
-      moveAccum: 0,
     }
     return { state: newState, actions: [{ kind: 'enter_interactive' }] }
   }
@@ -230,43 +211,13 @@ function handleHoverMove(
       phase: 'idle',
       cursorX: event.x,
       cursorY: event.y,
-      moveAccum: 0,
     }
     return { state: newState, actions: [{ kind: 'exit_interactive' }] }
   }
 
-  const inHitbox = isPointInHitbox(event.x, event.y, ctx.hitboxPx)
-  if (!inHitbox) {
-    // 在缓冲带但不在命中盒：重置累积移动
-    return {
-      state: { ...state, cursorX: event.x, cursorY: event.y, moveAccum: 0 },
-      actions: [],
-    }
-  }
-
-  // 在命中盒内：累积移动距离，检测抚摸 (§10)
-  const moved = distance(state.cursorX, state.cursorY, event.x, event.y)
-  const moveAccum = state.moveAccum + moved
-
-  if (moveAccum >= ctx.pettingMoveThreshold) {
-    // 抚摸触发：抢占 petted (§10)
-    const newState: InteractionState = {
-      ...state,
-      phase: 'petting',
-      cursorX: event.x,
-      cursorY: event.y,
-      moveAccum: 0,
-      activePreempt: 'petted',
-    }
-    return {
-      state: newState,
-      actions: [{ kind: 'preempt', interaction: 'petted' }],
-    }
-  }
-
-  // 继续累积
+  // 缓冲带内（含命中盒）移动：只追踪光标，悬停不抢占、不切换片段
   return {
-    state: { ...state, cursorX: event.x, cursorY: event.y, moveAccum },
+    state: { ...state, cursorX: event.x, cursorY: event.y },
     actions: [],
   }
 }
@@ -294,92 +245,6 @@ function handleHoverDown(
   return { state: newState, actions: [] }
 }
 
-// —— petting 阶段 —— //
-
-function handlePetting(
-  state: InteractionState,
-  event: MouseInputEvent,
-  ctx: InteractionContext,
-): InteractionResult {
-  if (event.type === 'move') {
-    return handlePettingMove(state, event, ctx)
-  }
-  if (event.type === 'down') {
-    return handlePettingDown(state, event, ctx)
-  }
-  // up 在 petting 阶段忽略
-  return { state, actions: [] }
-}
-
-function handlePettingMove(
-  state: InteractionState,
-  event: MouseInputEvent,
-  ctx: InteractionContext,
-): InteractionResult {
-  const inBuffer = isPointInBufferZone(event.x, event.y, ctx.hitboxPx, ctx.bufferPx)
-
-  if (!inBuffer) {
-    // 光标离开缓冲带：结束抚摸，退出交互态
-    const newState: InteractionState = {
-      ...state,
-      phase: 'idle',
-      cursorX: event.x,
-      cursorY: event.y,
-      moveAccum: 0,
-      activePreempt: null,
-    }
-    return {
-      state: newState,
-      actions: [{ kind: 'end_preempt' }, { kind: 'exit_interactive' }],
-    }
-  }
-
-  const inHitbox = isPointInHitbox(event.x, event.y, ctx.hitboxPx)
-  if (!inHitbox) {
-    // 离开命中盒但仍在缓冲带：结束抚摸，回到 hover
-    const newState: InteractionState = {
-      ...state,
-      phase: 'hover',
-      cursorX: event.x,
-      cursorY: event.y,
-      moveAccum: 0,
-      activePreempt: null,
-    }
-    return {
-      state: newState,
-      actions: [{ kind: 'end_preempt' }],
-    }
-  }
-
-  // 继续在命中盒内：保持抚摸
-  return {
-    state: { ...state, cursorX: event.x, cursorY: event.y },
-    actions: [],
-  }
-}
-
-function handlePettingDown(
-  state: InteractionState,
-  event: MouseInputEvent,
-  ctx: InteractionContext,
-): InteractionResult {
-  const inHitbox = isPointInHitbox(event.x, event.y, ctx.hitboxPx)
-  if (!inHitbox) {
-    return { state, actions: [] }
-  }
-
-  // 抚摸中按下：进入 pressing（保持 petted 抢占，等待拖拽/点击判定）
-  const newState: InteractionState = {
-    ...state,
-    phase: 'pressing',
-    cursorX: event.x,
-    cursorY: event.y,
-    pressX: event.x,
-    pressY: event.y,
-  }
-  return { state: newState, actions: [] }
-}
-
 // —— pressing 阶段 —— //
 
 function handlePressing(
@@ -391,7 +256,7 @@ function handlePressing(
     return handlePressingMove(state, event, ctx)
   }
   if (event.type === 'up') {
-    return handlePressingUp(state, event, ctx)
+    return handlePressingUp(state, event)
   }
   // down 在 pressing 阶段忽略
   return { state, actions: [] }
@@ -406,23 +271,15 @@ function handlePressingMove(
   const inBuffer = isPointInBufferZone(event.x, event.y, ctx.hitboxPx, ctx.bufferPx)
   if (!inBuffer) {
     // 离开缓冲带：取消
-    const actions: InteractionAction[] = []
-    if (state.activePreempt) {
-      actions.push({ kind: 'end_preempt' })
-    }
-    actions.push({ kind: 'exit_interactive' })
-
     const newState: InteractionState = {
       ...state,
       phase: 'idle',
       cursorX: event.x,
       cursorY: event.y,
-      moveAccum: 0,
       pressX: null,
       pressY: null,
-      activePreempt: null,
     }
-    return { state: newState, actions }
+    return { state: newState, actions: [{ kind: 'exit_interactive' }] }
   }
 
   // 检查拖拽阈值 (§7.5)
@@ -431,23 +288,17 @@ function handlePressingMove(
   const dist = distance(dx, dy, event.x, event.y)
 
   if (dist >= ctx.dragMoveThreshold) {
-    // 拖拽触发 (§7.5)
-    const actions: InteractionAction[] = []
-    // 如果之前在 petting 抢占，先结束
-    if (state.activePreempt === 'petted') {
-      actions.push({ kind: 'end_preempt' })
-    }
-    actions.push({ kind: 'preempt', interaction: 'dragged' })
-    actions.push({ kind: 'drag_move', x: event.x, y: event.y })
-
+    // 拖拽触发 (§7.5)：窗口跟随光标，不抢占片段
     const newState: InteractionState = {
       ...state,
       phase: 'dragging',
       cursorX: event.x,
       cursorY: event.y,
-      activePreempt: 'dragged',
     }
-    return { state: newState, actions }
+    return {
+      state: newState,
+      actions: [{ kind: 'drag_move', x: event.x, y: event.y }],
+    }
   }
 
   // 继续按下，更新光标位置
@@ -460,49 +311,17 @@ function handlePressingMove(
 function handlePressingUp(
   state: InteractionState,
   event: MouseInputEvent,
-  ctx: InteractionContext,
 ): InteractionResult {
-  const inHitbox = isPointInHitbox(event.x, event.y, ctx.hitboxPx)
-
-  if (!inHitbox) {
-    // 在命中盒外松手：取消，回到 hover
-    const actions: InteractionAction[] = []
-    if (state.activePreempt) {
-      actions.push({ kind: 'end_preempt' })
-    }
-
-    const newState: InteractionState = {
-      ...state,
-      phase: 'hover',
-      cursorX: event.x,
-      cursorY: event.y,
-      moveAccum: 0,
-      pressX: null,
-      pressY: null,
-      activePreempt: null,
-    }
-    return { state: newState, actions }
-  }
-
-  // 在命中盒内松手 = 点击 (§10)
-  // clicked 片段播放一次后自然结束，不需要 end_preempt
-  const actions: InteractionAction[] = []
-  if (state.activePreempt === 'petted') {
-    actions.push({ kind: 'end_preempt' })
-  }
-  actions.push({ kind: 'preempt', interaction: 'clicked' })
-
+  // 松手 = 点击，不触发任何抢占/片段切换，仅结束按压回到 hover
   const newState: InteractionState = {
     ...state,
     phase: 'hover',
     cursorX: event.x,
     cursorY: event.y,
-    moveAccum: 0,
     pressX: null,
     pressY: null,
-    activePreempt: null,
   }
-  return { state: newState, actions }
+  return { state: newState, actions: [] }
 }
 
 // —— dragging 阶段 —— //
@@ -521,12 +340,10 @@ function handleDragging(
   }
 
   if (event.type === 'up') {
-    // 松手：结束拖拽抢占，回到地面线 (§7.5)
+    // 松手：结束拖拽，窗口钳制到可见区并落回地面线 (§7.3/§7.5)
     const inBuffer = isPointInBufferZone(event.x, event.y, ctx.hitboxPx, ctx.bufferPx)
 
-    const actions: InteractionAction[] = [
-      { kind: 'end_preempt' },
-    ]
+    const actions: InteractionAction[] = [{ kind: 'drag_end' }]
 
     let newPhase: InteractionPhase
     if (inBuffer) {
@@ -541,10 +358,8 @@ function handleDragging(
       phase: newPhase,
       cursorX: event.x,
       cursorY: event.y,
-      moveAccum: 0,
       pressX: null,
       pressY: null,
-      activePreempt: null,
     }
     return { state: newState, actions }
   }

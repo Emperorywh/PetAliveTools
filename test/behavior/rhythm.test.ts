@@ -5,6 +5,7 @@ import {
   rhythmNeedRates,
   computeRhythmModulation,
 } from '../../src/main/behavior/rhythm'
+import { TRANSITION_WEIGHTS } from '../../src/main/behavior/transitions'
 import type { RhythmConfig } from '../../src/shared/types/behavior-config'
 
 const defaultConfig: RhythmConfig = {
@@ -52,16 +53,17 @@ describe('rhythmWeightModifiers (§9.3 night increases sleep weight)', () => {
     expect(Object.keys(mods)).toHaveLength(0)
   })
 
-  it('boosts sleep weight at night', () => {
+  it('boosts sleep path at night', () => {
     const mods = rhythmWeightModifiers(true, defaultConfig)
     expect(mods['lie']?.['sleep']).toBe(defaultConfig.nightSleepBoost)
-    expect(mods['idle_sit']?.['sleep']).toBe(defaultConfig.nightSleepBoost)
+    // idle_sit 无直达 sleep 边（§9.2 必经 lie）：夜间经 idle_sit→lie 引导入睡
+    expect(mods['idle_sit']?.['lie']).toBe(defaultConfig.nightSleepBoost * 0.8)
   })
 
   it('reduces activity weight at night', () => {
     const mods = rhythmWeightModifiers(true, defaultConfig)
-    // night: walk weight from idle_sit should be reduced
-    expect(mods['idle_sit']?.['walk']).toBeLessThan(1)
+    // night: idle_sit→stand should be reduced
+    expect(mods['idle_sit']?.['stand']).toBeLessThan(1)
     // stand→walk should be reduced
     expect(mods['stand']?.['walk']).toBeLessThan(1)
   })
@@ -69,9 +71,20 @@ describe('rhythmWeightModifiers (§9.3 night increases sleep weight)', () => {
   it('night sleep boost > day (empty)', () => {
     const nightMods = rhythmWeightModifiers(true, defaultConfig)
     const dayMods = rhythmWeightModifiers(false, defaultConfig)
-    const nightSleep = nightMods['idle_sit']?.['sleep'] ?? 1
-    const daySleep = dayMods['idle_sit']?.['sleep'] ?? 1
+    const nightSleep = nightMods['lie']?.['sleep'] ?? 1
+    const daySleep = dayMods['lie']?.['sleep'] ?? 1
     expect(nightSleep).toBeGreaterThan(daySleep)
+  })
+
+  it('所有倍率只落在 §9.2 边表已有的边上（倍率不能造边）', () => {
+    const mods = rhythmWeightModifiers(true, defaultConfig)
+    for (const [from, targets] of Object.entries(mods)) {
+      for (const to of Object.keys(targets)) {
+        expect(
+          (TRANSITION_WEIGHTS as Record<string, Record<string, number>>)[from]?.[to],
+        ).toBeDefined()
+      }
+    }
   })
 })
 
@@ -100,7 +113,7 @@ describe('computeRhythmModulation', () => {
   it('detects night correctly and produces modulation', () => {
     const result = computeRhythmModulation(23, defaultConfig)
     expect(result.isNight).toBe(true)
-    expect(result.weightMods['idle_sit']?.['sleep']).toBe(defaultConfig.nightSleepBoost)
+    expect(result.weightMods['lie']?.['sleep']).toBe(defaultConfig.nightSleepBoost)
     expect(result.needRateFactor).toBe(2)
   })
 

@@ -17,7 +17,7 @@ import type { Personality } from '../../shared/types/persona'
 const PERSONALITY_DIMS: ReadonlyArray<{ key: keyof Personality; label: string; desc: string }> = [
   { key: 'liveliness', label: '活泼', desc: '↑→ walk/play 权重↑' },
   { key: 'laziness', label: '慵懒', desc: '↑→ sleep/lie 权重↑' },
-  { key: 'clinginess', label: '粘人', desc: '↑→ 抚摸愉悦↑' },
+  { key: 'clinginess', label: '粘人', desc: '↑→ 求互动权重↑' },
   { key: 'timidity', label: '胆小', desc: '↑→ 更快回静止态' },
   { key: 'curiosity', label: '好奇', desc: '↑→ 稀有动作概率↑' },
 ]

@@ -4,10 +4,7 @@ import * as os from 'node:os'
 import { promises as fs } from 'node:fs'
 
 import {
-  buildProfileMenuSection,
-  buildTrayTemplate,
   ProfileSwitcher,
-  type TrayMenuState,
   type FileDialogs,
   type ProfileSwitcherHost,
 } from '../../src/main/shell/profile-switcher'
@@ -26,130 +23,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
-})
-
-function makeProfile(overrides: Partial<ProfileSummary> = {}): ProfileSummary {
-  return {
-    id: '小白',
-    name: '小白',
-    dir: '/pets/小白',
-    valid: true,
-    ...overrides,
-  }
-}
-
-const noopCallbacks = {
-  onSwitchProfile: () => {},
-  onImportProfile: () => {},
-  onExportProfile: () => {},
-  onDeleteProfile: () => {},
-}
-
-describe('buildProfileMenuSection', () => {
-  it('marks the active profile as checked radio item', () => {
-    const profiles = [makeProfile({ id: 'a', name: '小白' }), makeProfile({ id: 'b', name: '小黑' })]
-    const items = buildProfileMenuSection(profiles, 'b', noopCallbacks)
-
-    const switchMenu = items[0]!.submenu as Array<{ label: string; type?: string; checked?: boolean }>
-    expect(switchMenu[0]).toMatchObject({ label: '小白', type: 'radio', checked: false })
-    expect(switchMenu[1]).toMatchObject({ label: '小黑', type: 'radio', checked: true })
-  })
-
-  it('shows disabled placeholder when no profiles', () => {
-    const items = buildProfileMenuSection([], null, noopCallbacks)
-    const switchMenu = items[0]!.submenu as Array<{ label: string; enabled?: boolean }>
-    expect(switchMenu).toHaveLength(1)
-    expect(switchMenu[0]!.label).toBe('暂无宠物')
-    expect(switchMenu[0]!.enabled).toBe(false)
-  })
-
-  it('disables delete when only one profile', () => {
-    const items = buildProfileMenuSection(
-      [makeProfile({ id: 'a', name: '小白' })],
-      'a',
-      noopCallbacks,
-    )
-    const deleteItem = items.find((i) => i.label === '删除宠物')!
-    expect(deleteItem.enabled).toBe(false)
-  })
-
-  it('includes export/import items', () => {
-    const items = buildProfileMenuSection(
-      [makeProfile({ id: 'a', name: '小白' })],
-      'a',
-      noopCallbacks,
-    )
-    expect(items.find((i) => i.label?.includes('导出'))).toBeDefined()
-    expect(items.find((i) => i.label === '导入宠物…')).toBeDefined()
-  })
-})
-
-describe('buildTrayTemplate', () => {
-  it('composes full menu with feed/toy/mute + profile section + quit', () => {
-    const state: TrayMenuState = {
-      profiles: [makeProfile({ id: 'a', name: '小白' })],
-      activeProfileId: 'a',
-      isMuted: false,
-      isPetVisible: true,
-    }
-    const labels = buildTrayTemplate(state, {
-      ...noopCallbacks,
-      onFeed: () => {},
-      onToy: () => {},
-      onCall: () => {},
-      onToggleMute: () => {},
-      onToggleHide: () => {},
-      onSettings: () => {},
-      onAbout: () => {},
-      onImportWizard: () => {},
-    }).map((i) => i.label)
-
-    expect(labels).toContain('喂食')
-    expect(labels).toContain('给玩具')
-    expect(labels).toContain('静音')
-    expect(labels).toContain('导入片段…')
-    expect(labels).toContain('切换宠物')
-    expect(labels).toContain('隐藏')
-    expect(labels).toContain('设置')
-    expect(labels).toContain('关于')
-  })
-
-  it('toggles mute label based on state', () => {
-    const muted = buildTrayTemplate(
-      { profiles: [], activeProfileId: null, isMuted: true, isPetVisible: true },
-      {
-        ...noopCallbacks,
-        onFeed: () => {},
-        onToy: () => {},
-        onCall: () => {},
-        onToggleMute: () => {},
-        onToggleHide: () => {},
-        onSettings: () => {},
-        onAbout: () => {},
-        onImportWizard: () => {},
-      },
-    )
-    expect(muted.some((i) => i.label === '取消静音')).toBe(true)
-  })
-
-  it('shows 展示 instead of 隐藏 when pet is hidden', () => {
-    const menu = buildTrayTemplate(
-      { profiles: [], activeProfileId: null, isMuted: false, isPetVisible: false },
-      {
-        ...noopCallbacks,
-        onFeed: () => {},
-        onToy: () => {},
-        onCall: () => {},
-        onToggleMute: () => {},
-        onToggleHide: () => {},
-        onSettings: () => {},
-        onAbout: () => {},
-        onImportWizard: () => {},
-      },
-    )
-    expect(menu.some((i) => i.label === '展示')).toBe(true)
-    expect(menu.some((i) => i.label === '隐藏')).toBe(false)
-  })
 })
 
 // ── ProfileSwitcher class (uses temp dirs + fake dialogs) ── //

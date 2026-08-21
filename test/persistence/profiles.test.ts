@@ -11,6 +11,7 @@ import {
   saveNeedsState,
 } from '../../src/main/persistence/profiles'
 import { getProjectPaths } from '../../src/main/persistence/project-io'
+import { defaultNeedsState } from '../../src/shared/schemas'
 import type { NeedsState } from '../../src/shared/types/needs-state'
 
 let tmpDir: string
@@ -211,5 +212,19 @@ describe('needs-state per-profile independence (§12.2)', () => {
     await expect(
       saveNeedsState(dir, { hunger: 200, fatigue: 20, happiness: 50, attention: 50 }),
     ).rejects.toThrow(/invalid needs-state/)
+  })
+
+  it('loadNeedsStateOrDefault 修复被截断的 needs-state.json（§13）', async () => {
+    const dir = path.join(tmpDir, 'truncated')
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, 'needs-state.json')
+    await fs.writeFile(file, '', 'utf-8')
+
+    const state = await loadNeedsStateOrDefault(dir)
+    expect(state).toEqual(defaultNeedsState())
+
+    // 回写修复后磁盘文件重新可解析，再次加载不再走默认值路径
+    expect(JSON.parse(await fs.readFile(file, 'utf-8'))).toEqual(defaultNeedsState())
+    expect(await loadNeedsStateOrDefault(dir)).toEqual(defaultNeedsState())
   })
 })

@@ -6,6 +6,7 @@ import {
   personalitySignatureProbability,
 } from '../../src/main/behavior/personality'
 import { DEFAULT_NEED_RATES } from '../../src/main/behavior/needs'
+import { TRANSITION_WEIGHTS } from '../../src/main/behavior/transitions'
 import type { Personality } from '../../src/shared/types/persona'
 
 function mid(): Personality {
@@ -61,6 +62,28 @@ describe('personalityWeightModifiers (§9.6 transition weight modulation)', () =
     const activeWalk = activeMods['stand']?.['walk'] ?? 1
     const lazyWalk = lazyMods['stand']?.['walk'] ?? 1
     expect(activeWalk).toBeGreaterThan(lazyWalk)
+  })
+
+  it('所有倍率只落在 §9.2 边表已有的边上（倍率不能造边）', () => {
+    // 回归：clinginess 曾对不存在的 idle_sit→beg_food 边产生无效倍率，
+    // 且对 idle_sit→groom 的合并被后续写入覆盖（死代码）。
+    for (const persona of [mid(), highActive(), highLazy()]) {
+      const mods = personalityWeightModifiers(persona)
+      for (const [from, targets] of Object.entries(mods)) {
+        for (const to of Object.keys(targets)) {
+          expect(
+            (TRANSITION_WEIGHTS as Record<string, Record<string, number>>)[from]?.[to],
+          ).toBeDefined()
+        }
+      }
+    }
+  })
+
+  it('中性性格的 groom 倍率为 1（仅 curiosity 调制理毛）', () => {
+    const mods = personalityWeightModifiers(mid())
+    expect(mods['idle_sit']?.['groom']).toBe(1)
+    const curious = personalityWeightModifiers({ ...mid(), curiosity: 1.0 })
+    expect(curious['idle_sit']?.['groom']).toBe(1.5)
   })
 })
 

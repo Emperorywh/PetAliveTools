@@ -1,15 +1,14 @@
 /**
  * 鼠标交互处理器 (§10 交互层主进程端)
  *
- * 接收来自渲染进程的交互动作（IPC），执行窗口操作与调度抢占：
+ * 接收来自渲染进程的交互动作（IPC），执行窗口操作：
  *   - enter/exit interactive → setIgnoreMouseEvents 切换 (§6.1)
- *   - preempt → ClipScheduler.preempt() 抢占交互片段 (§10)
- *   - end_preempt → ClipScheduler.endPreempt() 结束循环交互片段
- *   - drag_move → 窗口跟随光标 (§7.3，使用 spatial/drag 纯逻辑)
- *   - context_menu → 弹出右键菜单 (§10)
+ *   - drag_move → 开始/继续拖拽，窗口跟随光标 (§7.3，spatial/drag 纯逻辑)
+ *   - drag_end → 结束拖拽：钳制可见区、落回地面线 (§7.3)
+ *   - context_menu → 弹出右键菜单（喂食/给玩具/呼唤等显式动作仍经调度抢占）
  *
- * 渲染进程负责检测交互类型（抚摸/点击/拖拽）并发出动作；
- * 主进程负责执行窗口操作、调度抢占与拖拽窗口位移。
+ * 鼠标交互不切换视频片段：调度器按自身节律继续播放，
+ * 仅拖拽期间行走位移暂停（onUserDragStart/End 回调通知外壳）。
  *
  * 运行于主进程。
  */
@@ -44,27 +43,26 @@ export interface MouseHandlerCallbacks {
   onFeed?: () => void
   /** 给玩具后的需求变更回调 (§10 愉悦↑注意力↑) */
   onToy?: () => void
+  /** 喂水后的需求变更回调 (§10 需求模型无口渴维度：轻度缓解饥饿、愉悦↑) */
+  onDrink?: () => void
   /** 打开导入向导（§5.5，向活跃宠物目录导入片段） */
   onImportWizard?: () => void
-  /**
-   * 交互需求反馈 (§10 交互表 / §9.4, IR-008)：
-   * 抚摸/点击/拖拽抢占时调用，参数为交互类型 (petted/clicked/dragged)。
-   */
-  onInteractionNeeds?: (interaction: string) => void
+  /** 用户拖拽开始：外壳暂停行走位移等自主移动 */
+  onUserDragStart?: () => void
+  /** 用户拖拽结束：外壳恢复行走位移 */
+  onUserDragEnd?: () => void
 }
 
 /** 音频协调器接口（最小依赖，便于解耦注入） */
 export interface AudioCoordinatorLike {
   onActionTriggered(action: string, clip: ClipMeta | null): void
-  onEmbeddedAudioEnded(): void
   toggleMute(): boolean
   readonly isMuted: boolean
 }
 
-/** 调度器接口（IR-001：返回 TickResult 供命令分发） */
+/** 调度器接口（IR-001：右键菜单显式动作抢占，返回 TickResult 供命令分发） */
 export interface PreemptableScheduler {
   preempt(state: string, nowMs: number): TickResult
-  endPreempt(nowMs: number): TickResult
 }
 
 /** 渲染命令分发器 (IR-001)：与 tick 循环相同的 processSchedulerCommands 分发 */
@@ -74,9 +72,8 @@ export type CommandDispatcher = (commands: readonly RenderCommand[]) => void
 const IPC = {
   enterInteractive: 'input:enter-interactive',
   exitInteractive: 'input:exit-interactive',
-  preempt: 'input:preempt',
-  endPreempt: 'input:end-preempt',
   dragMove: 'input:drag-move',
+  dragEnd: 'input:drag-end',
   contextMenu: 'input:context-menu',
 } as const
 
@@ -108,7 +105,7 @@ export class MouseHandler {
     this.scheduler = scheduler
   }
 
-  /** 注入命令分发器 (IR-001)：preempt/endPreempt 的渲染命令经此上屏 */
+  /** 注入命令分发器 (IR-001)：菜单动作抢占的渲染命令经此上屏 */
   setCommandDispatcher(dispatcher: CommandDispatcher): void {
     this.dispatcher = dispatcher
   }
@@ -127,26 +124,18 @@ export class MouseHandler {
       if (!this.window.isDestroyed()) setInteractive(this.window, false)
     })
 
-    ipcMain.on(IPC.preempt, (_e, interaction: string) => {
-      if (interaction === 'dragged') this.startDrag()
-      const result = this.scheduler?.preempt(interaction, Date.now())
-      // IR-001：抢占产生的渲染命令送入与 tick 循环相同的分发链路
-      this.dispatch(result?.commands)
-      // IR-010 / GAP-005：传递抢占选中的真实片段，embeddedAudio/clip.audio 判定可达
-      this.audio?.onActionTriggered(interaction, this.preemptTargetClip(result))
-      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表)
-      this.callbacks.onInteractionNeeds?.(interaction)
-    })
-
-    ipcMain.on(IPC.endPreempt, (_e, hitbox?: PixelRect) => {
-      this.endDrag(hitbox)
-      const result = this.scheduler?.endPreempt(Date.now())
-      this.dispatch(result?.commands)
-      this.audio?.onEmbeddedAudioEnded()
-    })
-
     ipcMain.on(IPC.dragMove, (_e, x: number, y: number) => {
+      // 首个 drag_move 即拖拽起点：记录抓取偏移并通知外壳暂停自主移动
+      if (!this.dragState) {
+        this.startDrag()
+        this.callbacks.onUserDragStart?.()
+      }
       this.handleDragMove(x, y)
+    })
+
+    ipcMain.on(IPC.dragEnd, (_e, hitbox?: PixelRect) => {
+      this.endDrag(hitbox)
+      this.callbacks.onUserDragEnd?.()
     })
 
     ipcMain.on(IPC.contextMenu, () => {
@@ -260,6 +249,13 @@ export class MouseHandler {
           this.dispatch(result?.commands)
           this.audio?.onActionTriggered('want_play', this.preemptTargetClip(result))
           this.callbacks.onToy?.()
+        },
+        onDrink: () => {
+          // 喂水 → 喝水片段（D 类 drink；无片段时仅需求生效）
+          const result = this.scheduler?.preempt('drink', Date.now())
+          this.dispatch(result?.commands)
+          this.audio?.onActionTriggered('drink', this.preemptTargetClip(result))
+          this.callbacks.onDrink?.()
         },
         onCall: () => {
           // 呼唤 → 被呼唤转身片段（B 类 called）

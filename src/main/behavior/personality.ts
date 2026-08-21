@@ -25,14 +25,17 @@ import { type NeedRates, DEFAULT_NEED_RATES } from './needs'
  *   - liveliness ↑ → walk/stand 权重 ↑、idle 权重 ↓
  *   - laziness ↑ → sleep/lie 权重 ↑、walk/stand 权重 ↓
  *   - timidity ↑ → 被抚摸相关状态权重 ↓、回静止态权重 ↑
- *   - clinginess ↑ → 求互动权重 ↑
- *   - curiosity ↑ → groom/explore 权重 ↑
+ *   - curiosity ↑ → groom 权重 ↑
+ *
+ * clinginess 的求互动对象（want_play / called / beg_food）不在 FSM
+ * 边表内（倍率只能调制已有边），clinginess 改经交互修饰
+ * （personalityInteractionModifiers）与情绪插入调度起作用。
  */
 export function personalityWeightModifiers(
   personality: Personality,
 ): Record<string, Record<string, number>> {
   const mods: Record<string, Record<string, number>> = {}
-  const { liveliness, laziness, timidity, clinginess, curiosity } = personality
+  const { liveliness, laziness, timidity, curiosity } = personality
 
   // liveliness: ↑→walk/stand↑, idle↓
   // 范围 [0,1]，中值 0.5 对应 1.0 倍率
@@ -43,7 +46,6 @@ export function personalityWeightModifiers(
   mergeMod(mods, 'stand', 'walk', walkBoost)
   mergeMod(mods, 'idle_sit', 'stand', walkBoost)
   mergeMod(mods, 'idle_sit', 'lie', idlePenalty)
-  mergeMod(mods, 'idle_sit', 'groom', 0.5 + curiosity)
 
   // laziness: ↑→sleep/lie↑, walk/stand↓
   const sleepBoost = 0.5 + laziness * 1.5 // laziness=1.0 → ×2.0
@@ -58,14 +60,7 @@ export function personalityWeightModifiers(
   mergeMod(mods, 'stand', 'idle_sit', timidRetreat)
   mergeMod(mods, 'walk', 'stand', timidRetreat)
 
-  // clinginess: ↑→求互动权重 ↑（want_play / called）
-  const clingyBoost = 0.5 + clinginess
-  mergeMod(mods, 'idle_sit', 'groom', (mods['idle_sit']?.['groom'] ?? 1) * 0.5 + clinginess * 0.5)
-  // clinginess 影响 beg_food（求关注）
-  mergeMod(mods, 'idle_sit', 'beg_food' as string, clingyBoost)
-
-  // curiosity: ↑→groom/explore 权重 ↑
-  // 已部分在 idle_sit→groom 处理
+  // curiosity: ↑→groom 权重 ↑
   mergeMod(mods, 'idle_sit', 'groom', 0.5 + curiosity)
 
   return mods

@@ -24,3 +24,6 @@ export {
   hasReachedWalkBound,
   DEFAULT_WALK_VELOCITY_PX_PER_SEC
 } from './walk-motion'
+
+export type { MenuPositionInput } from './menu-position'
+export { clampMenuPosition } from './menu-position'

@@ -9,7 +9,8 @@ import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 
 import type { ProjectData, Persona, NeedsState, BehaviorConfig, ClipMeta, AudioMeta } from '../../shared/types/project'
-import { clipFromFileName } from '../../shared/direct-media'
+import { clipFromFileName, isDirectVideoFile } from '../../shared/direct-media'
+import { writeJsonAtomic } from './atomic-write'
 import {
   validatePersona,
   validateNeedsState,
@@ -63,9 +64,28 @@ async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(content)
 }
 
+/**
+ * 读取 needs-state.json，缺失、截断或校验失败时返回 null（§13 崩溃恢复）。
+ *
+ * needs-state 是运行时状态而非用户配置：文件被写坏时业务上允许丢失并
+ * 回退默认值，不应让整个项目加载失败。纯读取，不做任何回写。
+ */
+export async function tryReadNeedsState(
+  needsStatePath: string,
+): Promise<NeedsState | null> {
+  try {
+    const raw: unknown = JSON.parse(await fs.readFile(needsStatePath, 'utf-8'))
+    if (validateNeedsState(raw).length === 0) {
+      return raw as NeedsState
+    }
+  } catch {
+    /* 缺失/损坏 → null，由调用方决定回退 */
+  }
+  return null
+}
+
 async function writeJson(filePath: string, data: unknown): Promise<void> {
-  const content = JSON.stringify(data, null, 2)
-  await fs.writeFile(filePath, content, 'utf-8')
+  await writeJsonAtomic(filePath, data)
 }
 
 // ── 创建 ── //
@@ -120,18 +140,17 @@ export async function createProject(
 export async function loadProject(projectDir: string): Promise<ProjectData> {
   const paths = getProjectPaths(projectDir)
 
-  const [personaRaw, needsStateRaw, behaviorConfigRaw, clips, audioRaw] = await Promise.all([
+  const [personaRaw, needsState, behaviorConfigRaw, clipsScan, audioRaw] = await Promise.all([
     readJson(paths.persona),
-    readJson(paths.needsState),
+    tryReadNeedsState(paths.needsState),
     readJson(paths.behaviorConfig),
-    loadDirectClips(paths.clipsDir),
+    scanClipsDirectory(paths.clipsDir),
     readJson(paths.audioMeta),
   ])
 
-  // 验证
+  // 验证（needs-state 已在读取时容错，损坏时回退默认值而非失败）
   const errors: ValidationErrors = []
   errors.push(...validatePersona(personaRaw))
-  errors.push(...validateNeedsState(needsStateRaw))
   errors.push(...validateBehaviorConfig(behaviorConfigRaw))
   errors.push(...validateAudioMetaArray(audioRaw))
 
@@ -141,9 +160,10 @@ export async function loadProject(projectDir: string): Promise<ProjectData> {
 
   return {
     persona: personaRaw as Persona,
-    needsState: needsStateRaw as NeedsState,
+    needsState: needsState ?? defaultNeedsState(),
     behaviorConfig: behaviorConfigRaw as BehaviorConfig,
-    clips,
+    clips: clipsScan.clips,
+    unrecognizedVideos: clipsScan.unrecognizedVideos,
     audio: audioRaw as AudioMeta[],
   }
 }
@@ -153,18 +173,43 @@ export async function loadProject(projectDir: string): Promise<ProjectData> {
  * 文件内容不会被打开；无法识别或浏览器不支持的文件会被忽略。
  */
 export async function loadDirectClips(clipsDir: string): Promise<ClipMeta[]> {
+  const { clips } = await scanClipsDirectory(clipsDir)
+  return clips
+}
+
+/** clips/ 扫描结果：可调度片段 + 无法识别的视频文件名（供导入窗口清理） */
+export interface ClipsScanResult {
+  readonly clips: ClipMeta[]
+  /**
+   * 扩展名属于可直接播放容器、但命名无法映射到动作清单的视频文件。
+   * 典型来源：动作状态从清单移除后遗留的旧片段（如 petted/annoyed）。
+   */
+  readonly unrecognizedVideos: readonly string[]
+}
+
+/**
+ * 扫描 clips/ 目录，区分可调度片段与无法识别的视频文件。
+ * 文件内容不会被打开；非视频文件（如遗留的 track.json）不计入任何一边。
+ */
+export async function scanClipsDirectory(clipsDir: string): Promise<ClipsScanResult> {
   let entries: string[]
   try {
     entries = await fs.readdir(clipsDir)
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { clips: [], unrecognizedVideos: [] }
+    }
     throw err
   }
 
-  return entries
-    .sort((a, b) => a.localeCompare(b))
-    .map((fileName) => clipFromFileName(fileName))
-    .filter((clip): clip is ClipMeta => clip !== null)
+  const clips: ClipMeta[] = []
+  const unrecognizedVideos: string[] = []
+  for (const fileName of [...entries].sort((a, b) => a.localeCompare(b))) {
+    const clip = clipFromFileName(fileName)
+    if (clip) clips.push(clip)
+    else if (isDirectVideoFile(fileName)) unrecognizedVideos.push(fileName)
+  }
+  return { clips, unrecognizedVideos }
 }
 
 // ── 写入 ── //

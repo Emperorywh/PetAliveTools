@@ -31,6 +31,7 @@ import {
   loadDirectClips,
   loadProject,
 } from './persistence/project-io'
+import { writeJsonAtomic } from './persistence/atomic-write'
 
 /**
  * IPC 通道保持 import 前缀，避免外壳调用入口发生无关变化。
@@ -212,7 +213,8 @@ export async function validatePreviewClip(
 
 /**
  * 从项目 clips/ 目录删除一个已导入的片段文件。
- * 只允许删除命名可识别的片段文件，文件名不允许携带任何路径分隔符。
+ * 允许删除命名无法识别的视频文件（清单变更后的遗留片段），
+ * 但仍只限可直接播放的视频扩展名，文件名不允许携带任何路径分隔符。
  */
 export async function deleteClipDirectly(
   projectDir: string,
@@ -222,8 +224,8 @@ export async function deleteClipDirectly(
   if (fileName === '' || /[\\/]/.test(fileName) || fileName === '.' || fileName === '..') {
     throw new Error(`片段文件名不合法: ${fileName}`)
   }
-  if (!clipFromFileName(fileName)) {
-    throw new Error(`该文件不是可识别的导入片段: ${fileName}`)
+  if (!isDirectVideoFile(fileName)) {
+    throw new Error(`只能删除 clips/ 内的视频文件: ${fileName}`)
   }
 
   const paths = getProjectPaths(projectDir)
@@ -242,7 +244,7 @@ async function appendAudioMeta(audioMetaPath: string, meta: AudioMeta): Promise<
   const updated = [...existing, meta]
   const errors = validateAudioMetaArray(updated)
   if (errors.length > 0) throw new Error(`音频元数据验证失败:\n  ${errors.join('\n  ')}`)
-  await fs.writeFile(audioMetaPath, JSON.stringify(updated, null, 2), 'utf-8')
+  await writeJsonAtomic(audioMetaPath, updated)
 }
 
 /**

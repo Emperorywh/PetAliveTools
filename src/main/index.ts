@@ -16,7 +16,7 @@ import {
   createSettingsWindow,
   setInteractive,
 } from './window'
-import { createTray, rebuildTrayMenu } from './tray'
+import { createTray } from './tray'
 import {
   HotkeyManager,
   DisplayManager,
@@ -33,6 +33,7 @@ import { registerMediaScheme, handleMediaProtocol } from './media-protocol'
 import { localPathToMediaUrl } from '../shared/media-url'
 import { clipFromFileName } from '../shared/direct-media'
 import { MouseHandler } from './input/mouse-handler'
+import { closeContextMenu, showTrayMenu } from './input/context-menu'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
 import {
   ProfileManager,
@@ -49,7 +50,14 @@ import type { Personality } from '../shared/types/persona'
 import type { NeedsState } from '../shared/types/needs-state'
 import type { ClipMeta } from '../shared/types/clip-meta'
 import type { ProjectData } from '../shared/types/project'
-import { applyNeedDelta, advanceNeeds, DEFAULT_NEED_RATES, needWeightModifiers, INTERACTION_NEED_DELTAS, type NeedRates } from './behavior/needs'
+import {
+  applyNeedDelta,
+  advanceNeeds,
+  DEFAULT_NEED_RATES,
+  needWeightModifiers,
+  sleepingNeedRates,
+  type NeedRates,
+} from './behavior/needs'
 import {
   personalityNeedRates,
   personalityWeightModifiers,
@@ -58,7 +66,6 @@ import { currentHour, rhythmWeightModifiers, rhythmNeedRates, isNightTime } from
 import { advanceOffline, computeOfflineSec } from './behavior/offline-progression'
 import { BehaviorFsm } from './behavior/fsm'
 import { createSeededRandom } from './behavior/transitions'
-import { selectClipForState } from './behavior/state-lookup'
 import {
   ClipScheduler,
   type ClipSchedulerConfig,
@@ -67,7 +74,7 @@ import {
 } from './scheduler/clip-scheduler'
 import { WalkController } from './scheduler/walk-controller'
 import { currentItem } from './scheduler/lifecycle'
-import { SchedulerCommandDispatcher } from './dispatch/scheduler-dispatcher'
+import { SCHEDULER_IPC, SchedulerCommandDispatcher } from './dispatch/scheduler-dispatcher'
 import { clampWindowX, groundedWindowY } from '../shared/spatial'
 import { defaultHitboxPx } from '../shared/input'
 
@@ -108,6 +115,8 @@ let scheduler: ClipScheduler | null = null
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 let commandDispatcher: SchedulerCommandDispatcher | null = null
 let walkController: WalkController | null = null
+/** 用户拖拽期间为 true：行走位移暂停，拖拽结束后恢复 */
+let userDragging = false
 let projectClips: readonly ClipMeta[] = []
 let needRates: NeedRates = DEFAULT_NEED_RATES
 let loopStartMs = 0
@@ -116,6 +125,10 @@ let lastTickMs = 0
 let currentBehaviorConfig: BehaviorConfig | null = null
 let currentPersonality: Personality | null = null
 let lastWeightRefreshMs = 0
+/** 渲染层就绪握手：宠物视图注册完调度监听器后为 true，此前不下发调度命令 */
+let rendererReady = false
+/** 渲染层就绪前需要补发的空素材引导（§13） */
+let guidancePending = false
 
 /**
  * 引导全部外壳组件。在 app ready 后调用。
@@ -151,9 +164,24 @@ async function bootstrap(): Promise<void> {
       void handleActiveProfileChanged(profile)
     },
     onProfilesChanged: () => {
-      void refreshTrayMenu()
+      // 自定义托盘菜单按打开时状态生成，profile 列表变化无需刷新
     },
     onNotify: (message) => console.log('[profile]', message),
+  })
+
+  // 0.5 渲染层就绪握手：宠物视图注册完监听器后通知主进程。
+  // 必须早于窗口创建注册——首个 play 指令与页面加载存在竞态，
+  // 早于监听器注册的 IPC 会被静默丢弃，宠物窗口将永远透明 (§13)。
+  // dev 整页重载会再次触发：补发当前片段即可恢复画面。
+  ipcMain.on(SCHEDULER_IPC.rendererReady, () => {
+    rendererReady = true
+    if (guidancePending) {
+      guidancePending = false
+      mainWindow?.webContents.send(SCHEDULER_IPC.guidance)
+    } else {
+      commandDispatcher?.replayToRenderer()
+    }
+    startSchedulerTick()
   })
 
   // 1. 创建透明置顶宠物窗口
@@ -187,9 +215,7 @@ async function bootstrap(): Promise<void> {
     getSpriteBounds: () => defaultHitboxPx(WINDOW_WIDTH, WINDOW_HEIGHT),
   })
 
-  // 3.6 可见性变化时刷新托盘菜单的「隐藏/展示」标签 (§10)
-  mainWindow.on('show', () => void refreshTrayMenu())
-  mainWindow.on('hide', () => void refreshTrayMenu())
+  // 3.6 可见性变化不再需要刷新托盘：自定义菜单按打开时状态生成
 
   // 4. 音频协调器（§11）：音频库在 rebuildScheduler 中注入 (§11.1)
   audioCoordinator = new AudioCoordinator(
@@ -238,9 +264,8 @@ async function bootstrap(): Promise<void> {
     processSchedulerCommands(result.commands)
   })
 
-  // 5. 系统托盘（§10、§12.2、§12.4）
+  // 5. 系统托盘（§10、§12.2、§12.4）：右键弹出自定义菜单
   tray = createTray(trayCallbacks())
-  await refreshTrayMenu()
 
   // 6. 可配置全局快捷键：安全阀隐藏 (§10、§12.4)
   hotkeyManager = new HotkeyManager(() => mainWindow)
@@ -276,18 +301,20 @@ async function bootstrap(): Promise<void> {
         void persistNeedsState()
         refreshBehaviorWeights()
       },
-      // IR-008：抚摸/点击/拖拽的需求反馈 (§10 交互表 / §9.4)。
-      // 拖拽打搅不开心（happiness < 40）的宠物时，额外插入烦躁反应，
-      // 让 D 类情绪动作对交互也有回应。
-      onInteractionNeeds: (interaction) => {
-        const delta = INTERACTION_NEED_DELTAS[interaction]
-        if (!delta) return
-        needsState = applyNeedDelta(needsState, delta)
+      onDrink: () => {
+        // 喂水：需求模型无口渴维度，按轻度缓解饥饿 + 愉悦小幅上升处理
+        needsState = applyNeedDelta(needsState, { hunger: -10, happiness: 5 })
         void persistNeedsState()
         refreshBehaviorWeights()
-        if (interaction === 'dragged' && needsState.happiness < 40 && resolveRealClip('annoyed')) {
-          preemptAction('annoyed')
-        }
+      },
+      // 用户拖拽不切换片段：仅暂停/恢复行走位移，避免窗口在被拖动时自主移动
+      onUserDragStart: () => {
+        userDragging = true
+        walkController?.stop()
+      },
+      onUserDragEnd: () => {
+        userDragging = false
+        syncWalkMotion()
       },
     },
     { windowWidth: WINDOW_WIDTH, windowHeight: WINDOW_HEIGHT },
@@ -325,16 +352,22 @@ function trayCallbacks(): TrayMenuCallbacks {
       void persistNeedsState()
       refreshBehaviorWeights()
     },
+    onDrink: () => {
+      // 喂水 → 喝水片段（D 类）；需求模型无口渴维度，轻度缓解饥饿
+      preemptAction('drink')
+      needsState = applyNeedDelta(needsState, { hunger: -10, happiness: 5 })
+      void persistNeedsState()
+      refreshBehaviorWeights()
+    },
     onCall: () => {
       // 呼唤宠物 → 被呼唤转身片段（B 类）
       preemptAction('called')
     },
-    onToggleMute: async () => {
+    onToggleMute: () => {
       const muted = audioCoordinator?.toggleMute() ?? false
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('audio:set-muted', muted)
       }
-      await refreshTrayMenu()
     },
     onToggleHide: () => {
       if (!mainWindow || mainWindow.isDestroyed()) return
@@ -361,15 +394,24 @@ function trayCallbacks(): TrayMenuCallbacks {
     onImportWizard: () => {
       openImportWizard()
     },
+    onQuit: () => {
+      app.quit()
+    },
+    onOpenMenu: () => {
+      void openTrayMenu()
+    },
   }
 }
 
-/** 以当前 profile 列表、静音与宠物可见状态重建托盘菜单 (§12.2) */
-async function refreshTrayMenu(): Promise<void> {
-  if (!tray || !profileSwitcher) return
+/**
+ * 收集托盘菜单状态并弹出自定义菜单窗口（§10、§12.2）。
+ * 状态按打开时快照生成：profile 列表、活跃项、静音、宠物可见性。
+ */
+async function openTrayMenu(): Promise<void> {
+  if (!profileSwitcher) return
   const isPetVisible = mainWindow?.isVisible() ?? false
   const state = await profileSwitcher.getMenuState(audioCoordinator?.isMuted ?? false, isPetVisible)
-  rebuildTrayMenu(tray, state, trayCallbacks())
+  showTrayMenu(state, trayCallbacks())
 }
 
 /** 将当前需求状态持久化到活跃宠物的项目目录 (§12.2 状态独立) */
@@ -380,12 +422,6 @@ async function persistNeedsState(): Promise<void> {
   } catch (err) {
     console.warn('[needs] failed to save needs-state:', err)
   }
-}
-
-/** 解析状态对应的真实片段（无真实片段/占位时返回 null，供音频默认映射兜底） */
-function resolveRealClip(state: string): ClipMeta | null {
-  const clip = selectClipForState(state, projectClips)
-  return isPlaceholderClip(clip) ? null : clip
 }
 
 /** FSM 权重热更新周期 (ms, IR-007)：需求/节律漂移最多 60s 内生效 */
@@ -458,10 +494,21 @@ async function initScheduler(): Promise<void> {
   } catch (err) {
     console.error('[scheduler] init failed, showing guidance:', err)
     projectClips = []
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('scheduler:guidance')
-    }
+    sendGuidanceToRenderer()
   }
+}
+
+/**
+ * 向宠物视图发送空素材引导；渲染层未就绪时挂起，就绪握手时补发。
+ * webContents.send 不缓冲消息，直接发送会重蹈启动竞态 (§13)。
+ */
+function sendGuidanceToRenderer(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!rendererReady) {
+    guidancePending = true
+    return
+  }
+  mainWindow.webContents.send(SCHEDULER_IPC.guidance)
 }
 
 /**
@@ -560,9 +607,7 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
   // §13 素材库为空：弹引导，不崩溃
   const hasRealClips = projectClips.length > 0 && projectClips.some((c) => !isPlaceholderClip(c))
   if (!hasRealClips) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('scheduler:guidance')
-    }
+    sendGuidanceToRenderer()
   }
 }
 
@@ -571,9 +616,10 @@ async function rebuildScheduler(data: ProjectData): Promise<void> {
  *
  * 每个 tick：推进需求 → 处理循环完成 → 推进调度器 → 分发渲染命令。
  * 循环片段在 LOOP_CLIP_DURATION_MS 后通知调度器完成。
+ * 渲染层就绪握手完成前不启动：首个播放指令不得早于监听器注册。
  */
 function startSchedulerTick(): void {
-  if (schedulerTimer) return
+  if (schedulerTimer || !rendererReady) return
   lastTickMs = Date.now()
   schedulerTimer = setInterval(() => {
     if (!scheduler) return
@@ -581,8 +627,13 @@ function startSchedulerTick(): void {
     const elapsedSec = (nowMs - lastTickMs) / 1000
     lastTickMs = nowMs
 
-    // 推进需求 (§9.4)
-    needsState = advanceNeeds(needsState, elapsedSec, needRates)
+    // 推进需求 (§9.4)：FSM 处于睡眠态时疲劳改为恢复（睡眠是疲劳唯一恢复路径）
+    const sleeping = scheduler.snapshot.fsmState === 'sleep'
+    needsState = advanceNeeds(
+      needsState,
+      elapsedSec,
+      sleeping ? sleepingNeedRates(needRates) : needRates,
+    )
 
     // 需求/节律权重热更新 (IR-007)：周期漂移 ≤60s 内反映到 FSM 权重
     if (nowMs - lastWeightRefreshMs >= WEIGHT_REFRESH_MS) {
@@ -628,10 +679,15 @@ function processSchedulerCommands(commands: readonly RenderCommand[]): void {
 /**
  * 同步行走位移 (§7.3 行走移动)：调度器当前正在播放 walk 片段时
  * 按片段方向（无方向标记时用朝向记忆）恒速平移窗口，否则停止。
- * 每次命令分发后调用；周期完成、交互抢占与用户拖拽都会经此停止位移。
+ * 每次命令分发后调用；周期完成或用户拖拽期间位移停止。
+ * 用户拖拽结束后由 onUserDragEnd 再次调用以恢复行走。
  */
 function syncWalkMotion(): void {
   if (!walkController) return
+  if (userDragging) {
+    walkController.stop()
+    return
+  }
   const snap = scheduler?.snapshot
   const item = snap?.cycle ? currentItem(snap.cycle.queue) : null
   const walkClip = item?.kind === 'play' ? item.clip : null
@@ -709,7 +765,6 @@ async function handleActiveProfileChanged(profile: ProfileSummary | null): Promi
   if (profile === null) {
     needsState = INITIAL_NEEDS
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
-    await refreshTrayMenu()
     return
   }
 
@@ -724,9 +779,7 @@ async function handleActiveProfileChanged(profile: ProfileSummary | null): Promi
     console.warn(`[profile] invalid project "${profile.id}", using defaults:`, err)
     needsState = await loadNeedsStateOrDefault(profile.dir)
     scheduler = null
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('scheduler:guidance')
-    }
+    sendGuidanceToRenderer()
   }
 
   // 3. 设置存储指向新宠物项目目录（persona/behavior-config 为项目内文件 §12.1）
@@ -749,8 +802,6 @@ async function handleActiveProfileChanged(profile: ProfileSummary | null): Promi
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('profile:switched', profile.id, profile.name)
   }
-
-  await refreshTrayMenu()
 }
 
 /** 导入/导出用文件对话框 (§12.3) */
@@ -908,10 +959,27 @@ function registerSettingsIpc(): void {
   })
 }
 
+// 单实例锁：共享同一 userData 的第二个实例（dev 与安装版同源）不重复
+// 创建宠物窗口与托盘，而是唤起已有窗口后自行退出；避免调度器、
+// 快捷键注册与缓存目录互相冲突
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (gotSingleInstanceLock) {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  })
+} else {
+  app.quit()
+}
+
 // 特权媒体协议声明须在 app ready 前完成
 registerMediaScheme()
 
 app.whenReady().then(() => {
+  // 未取得单实例锁：app.quit() 已在途，不再引导任何窗口
+  if (!gotSingleInstanceLock) return
+
   // 本地媒体 petmedia:// → 文件映射（导入向导/宠物窗口的 <video>/<audio>）
   handleMediaProtocol()
 
@@ -945,6 +1013,7 @@ app.on('will-quit', () => {
   screenManager?.dispose()
   displayManager?.dispose()
   audioCoordinator?.dispose()
+  closeContextMenu()
 })
 
 app.on('before-quit', () => {

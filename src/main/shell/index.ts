@@ -34,11 +34,7 @@ export {
   mergePersonality,
 } from './settings-store'
 
-export {
-  buildProfileMenuSection,
-  buildTrayTemplate,
-  ProfileSwitcher,
-} from './profile-switcher'
+export { ProfileSwitcher } from './profile-switcher'
 export type {
   TrayMenuCallbacks,
   TrayMenuState,

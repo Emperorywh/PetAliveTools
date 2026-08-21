@@ -128,3 +128,42 @@ export function createSettingsWindow(): BrowserWindow {
   loadToolView(win, 'settings')
   return win
 }
+
+/** 右键菜单窗口宽度 (DIP)：菜单面板 208 + 四周 16px 透明边距（容纳投影） */
+export const CONTEXT_MENU_WINDOW_WIDTH = 240
+/**
+ * 菜单窗口初始高度 (DIP)：仅为占位，窗口隐藏；
+ * 渲染视图挂载后回报实际内容高度，控制器按回报值重设尺寸再显示
+ * （宠物菜单固定矮、托盘菜单随宠物数量变化）
+ */
+export const CONTEXT_MENU_WINDOW_PROVISIONAL_HEIGHT = 376
+
+/**
+ * 创建右键上下文菜单窗口（§10，自定义 HTML 菜单）。
+ *
+ * - 透明无边框小窗口，承载 #context-menu 渲染视图（照料动作 + 功能项）
+ * - 面板四周留 16px 透明边距给 CSS 投影，窗口本体不可缩放
+ * - 置顶层级高于宠物窗口（screen-saver），失焦由 context-menu 控制器关闭
+ *
+ * @param hashQuery hash 查询参数（不含 #，如 `context-menu?muted=1` 或托盘模式
+ *   `context-menu?mode=tray&...`），静态状态经 URL 注入、打开时定型
+ */
+export function createContextMenuWindow(hashQuery: string): BrowserWindow {
+  const win = new BrowserWindow({
+    width: CONTEXT_MENU_WINDOW_WIDTH,
+    height: CONTEXT_MENU_WINDOW_PROVISIONAL_HEIGHT,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+      spellcheck: false
+    },
+  })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  loadToolView(win, hashQuery)
+  return win
+}

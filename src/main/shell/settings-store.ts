@@ -18,6 +18,7 @@ import {
   defaultBehaviorConfig,
 } from '../../shared/schemas'
 import type { ValidationErrors } from '../../shared/schemas'
+import { writeJsonAtomic } from '../persistence/atomic-write'
 
 const FILE_BEHAVIOR_CONFIG = 'behavior-config.json'
 const FILE_PERSONA = 'persona.json'
@@ -28,8 +29,7 @@ async function readJson(filePath: string): Promise<unknown> {
 }
 
 async function writeJson(filePath: string, data: unknown): Promise<void> {
-  const content = JSON.stringify(data, null, 2)
-  await fs.writeFile(filePath, content, 'utf-8')
+  await writeJsonAtomic(filePath, data)
 }
 
 /**

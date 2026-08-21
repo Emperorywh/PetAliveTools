@@ -3,9 +3,12 @@
  *
  * 在宠物窗口中监听鼠标事件，驱动交互状态机（src/shared/input），
  * 将状态机输出的动作通过 IPC 发送到主进程执行：
- *   - mousemove（穿透态下也由 forward:true 转发）→ 追踪光标、切换穿透/交互
- *   - mousedown/mouseup（交互态下）→ 抚摸/点击/拖拽检测
+ *   - mousemove（穿透态下也由 forward:true 转发）→ 追踪光标、切换穿透/交互；
+ *     悬停（含命中盒内移动）不触发任何动作
+ *   - mousedown/mouseup（交互态下）→ 点击不触发动作；拖拽驱动窗口位移
  *   - contextmenu（交互态下）→ 弹出右键菜单
+ *
+ * 交互不切换视频片段：状态机不再产出抢占类动作。
  *
  * 命中盒像素坐标由调用方提供（从片段元数据 hitbox 归一化值换算，
  * §5.4/§6.1）。
@@ -30,8 +33,6 @@ export interface InteractionHandlerConfig {
   readonly getHitboxPx: () => PixelRect
   /** 缓冲带像素 (§6.1: 8–12px)，默认 10 */
   readonly bufferPx?: number
-  /** 抚摸触发移动阈值（累积像素），默认 3 */
-  readonly pettingMoveThreshold?: number
   /** 拖拽触发移动阈值（距按下点的像素），默认 5 */
   readonly dragMoveThreshold?: number
 }
@@ -59,7 +60,6 @@ export class InteractionHandler {
   private get context(): InteractionContext {
     return createInteractionContext(this.config.getHitboxPx(), {
       bufferPx: this.config.bufferPx,
-      pettingMoveThreshold: this.config.pettingMoveThreshold,
       dragMoveThreshold: this.config.dragMoveThreshold,
     })
   }
@@ -81,9 +81,10 @@ export class InteractionHandler {
     this.process({ type: 'up', x: e.clientX, y: e.clientY })
   }
 
-  /** 处理 contextmenu 事件 → 弹出右键菜单 (§10) */
+  /** 处理 contextmenu 事件 → 弹出右键菜单 (§10)；拖拽进行中不弹出 */
   handleContextMenu(e: MouseEvent): void {
     e.preventDefault()
+    if (this.state.phase === 'dragging') return
     window.petalive?.input?.contextMenu()
   }
 
@@ -106,12 +107,9 @@ export class InteractionHandler {
       case 'exit_interactive':
         bridge.exitInteractive()
         break
-      case 'preempt':
-        bridge.preempt(action.interaction)
-        break
-      case 'end_preempt':
+      case 'drag_end':
         // 回传当前命中盒：主进程用它推导精灵包围盒，做拖拽放置钳制 (§7.3)
-        bridge.endPreempt(this.config.getHitboxPx())
+        bridge.dragEnd(this.config.getHitboxPx())
         break
       case 'drag_move':
         bridge.dragMove(action.x, action.y)

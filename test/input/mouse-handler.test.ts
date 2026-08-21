@@ -24,6 +24,8 @@ vi.mock('../../src/main/window', () => ({ setInteractive: vi.fn() }))
 vi.mock('../../src/main/input/context-menu', () => ({ showContextMenu: vi.fn() }))
 
 import { MouseHandler } from '../../src/main/input/mouse-handler'
+import { showContextMenu } from '../../src/main/input/context-menu'
+import type { ContextMenuCallbacks } from '../../src/main/input/context-menu'
 import {
   ClipScheduler,
   type ClipSchedulerConfig,
@@ -85,17 +87,24 @@ function makeScheduler(clips: ClipMeta[]): ClipScheduler {
 
 const CLIPS: ClipMeta[] = [
   clip({ id: 'idle_sit_01', state: 'idle_sit', loop: true }),
-  clip({ id: 'petted_01', state: 'petted', category: 'interactive', loop: true }),
-  clip({ id: 'clicked_01', state: 'clicked', category: 'interactive' }),
-  clip({ id: 'eat_01', state: 'eat', category: 'interactive', prop: true }),
+  clip({ id: 'called_01', state: 'called', category: 'interactive' }),
+  clip({ id: 'drink_01', state: 'drink', category: 'interactive' }),
 ]
 
-describe('MouseHandler (IR-001 抢占命令分发)', () => {
+/** 通过右键菜单回调驱动显式动作抢占（鼠标交互本身不再抢占） */
+function invokeMenuAction(action: keyof ContextMenuCallbacks): void {
+  ipcOnHandlers.get('input:context-menu')!({} as unknown)
+  const callbacks = vi.mocked(showContextMenu).mock.calls[0]![1]
+  ;(callbacks[action] as () => void)()
+}
+
+describe('MouseHandler (IR-001 菜单动作抢占命令分发)', () => {
   beforeEach(() => {
     ipcOnHandlers.clear()
+    vi.mocked(showContextMenu).mockClear()
   })
 
-  it('input:preempt IPC → 交互片段经分发链路实际上屏 (scheduler:play)', () => {
+  it('右键菜单呼唤 → called 片段经分发链路实际上屏 (scheduler:play)', () => {
     const { win, send } = makeFakeWindow()
     const handler = new MouseHandler(win, {
       onHide: () => {},
@@ -110,38 +119,70 @@ describe('MouseHandler (IR-001 抢占命令分发)', () => {
     handler.setScheduler(scheduler)
     handler.setCommandDispatcher((commands) => dispatcher.dispatch(commands))
 
-    const preempt = ipcOnHandlers.get('input:preempt')
-    expect(preempt).toBeDefined()
-    preempt!({} as unknown, 'petted')
+    invokeMenuAction('onCall')
 
     const playCalls = send.mock.calls.filter((c) => c[0] === 'scheduler:play')
     expect(playCalls.length).toBeGreaterThan(0)
     const payload = playCalls[0][1] as PlayClipPayload
-    expect(payload.clipId).toBe('petted_01')
-    expect(payload.clipUrl).toContain('petted_01.webm')
+    expect(payload.clipId).toBe('called_01')
+    expect(payload.clipUrl).toContain('called_01.webm')
 
     handler.dispose()
   })
 
-  it('未注入分发器时抢占不抛错（分发为可选增强）', () => {
+  it('右键菜单喝水 → drink 片段实际上屏并触发 onDrink 需求回调', () => {
+    const { win, send } = makeFakeWindow()
+    const onDrink = vi.fn()
+    const handler = new MouseHandler(win, {
+      onHide: () => {},
+      onSettings: () => {},
+      onAbout: () => {},
+      onDrink,
+    }, { windowWidth: 400, windowHeight: 400 })
+    const scheduler = makeScheduler(CLIPS)
+    const dispatcher = new SchedulerCommandDispatcher({
+      getWindow: () => win,
+      getProjectDir: () => '/proj/pet-a',
+    })
+    handler.setScheduler(scheduler)
+    handler.setCommandDispatcher((commands) => dispatcher.dispatch(commands))
+    handler.setAudioCoordinator({
+      onActionTriggered: vi.fn(),
+      toggleMute: () => false,
+      isMuted: false,
+    })
+
+    invokeMenuAction('onDrink')
+
+    const playCalls = send.mock.calls.filter((c) => c[0] === 'scheduler:play')
+    expect(playCalls.length).toBeGreaterThan(0)
+    const payload = playCalls[0][1] as PlayClipPayload
+    expect(payload.clipId).toBe('drink_01')
+    expect(payload.clipUrl).toContain('drink_01.webm')
+    expect(onDrink).toHaveBeenCalledTimes(1)
+
+    handler.dispose()
+  })
+
+  it('未注入分发器/调度器时菜单动作不抛错（分发为可选增强）', () => {
     const { win } = makeFakeWindow()
     const handler = new MouseHandler(win, {
       onHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
     }, { windowWidth: 400, windowHeight: 400 })
-    handler.setScheduler(makeScheduler(CLIPS))
-    expect(() => ipcOnHandlers.get('input:preempt')!({} as unknown, 'clicked')).not.toThrow()
+    expect(() => invokeMenuAction('onCall')).not.toThrow()
     handler.dispose()
   })
 })
 
-describe('MouseHandler (IR-010/GAP-005 音频片段上下文)', () => {
+describe('MouseHandler (IR-010 音频片段上下文)', () => {
   beforeEach(() => {
     ipcOnHandlers.clear()
+    vi.mocked(showContextMenu).mockClear()
   })
 
-  it('抢占路径向音频协调器传真实片段（不再恒 null）', () => {
+  it('菜单动作向音频协调器传真实片段（不再恒 null）', () => {
     const { win } = makeFakeWindow()
     const handler = new MouseHandler(win, {
       onHide: () => {},
@@ -153,43 +194,86 @@ describe('MouseHandler (IR-010/GAP-005 音频片段上下文)', () => {
     const onActionTriggered = vi.fn()
     handler.setAudioCoordinator({
       onActionTriggered,
-      onEmbeddedAudioEnded: vi.fn(),
       toggleMute: () => false,
       isMuted: false,
     })
 
-    ipcOnHandlers.get('input:preempt')!({} as unknown, 'petted')
+    invokeMenuAction('onCall')
 
     expect(onActionTriggered).toHaveBeenCalledTimes(1)
     const [action, clipArg] = onActionTriggered.mock.calls[0] as [string, ClipMeta]
-    expect(action).toBe('petted')
-    expect(clipArg?.id).toBe('petted_01')
+    expect(action).toBe('called')
+    expect(clipArg?.id).toBe('called_01')
 
     handler.dispose()
   })
 })
 
-describe('MouseHandler (IR-008 交互需求反馈)', () => {
+describe('MouseHandler 拖拽 IPC（交互不切换片段）', () => {
   beforeEach(() => {
     ipcOnHandlers.clear()
+    vi.mocked(showContextMenu).mockClear()
   })
 
-  it('抚摸/点击抢占触发 onInteractionNeeds 回调', () => {
+  it('不再注册 input:preempt / input:end-preempt 频道', () => {
     const { win } = makeFakeWindow()
-    const onInteractionNeeds = vi.fn()
     const handler = new MouseHandler(win, {
       onHide: () => {},
       onSettings: () => {},
       onAbout: () => {},
-      onInteractionNeeds,
     }, { windowWidth: 400, windowHeight: 400 })
-    handler.setScheduler(makeScheduler(CLIPS))
+    expect(ipcOnHandlers.has('input:preempt')).toBe(false)
+    expect(ipcOnHandlers.has('input:end-preempt')).toBe(false)
+    expect(ipcOnHandlers.has('input:drag-end')).toBe(true)
+    handler.dispose()
+  })
 
-    ipcOnHandlers.get('input:preempt')!({} as unknown, 'petted')
-    ipcOnHandlers.get('input:preempt')!({} as unknown, 'clicked')
+  it('首个 drag-move 开始拖拽并移动窗口，触发 onUserDragStart 一次', () => {
+    const { win } = makeFakeWindow()
+    const onUserDragStart = vi.fn()
+    const onUserDragEnd = vi.fn()
+    const handler = new MouseHandler(win, {
+      onHide: () => {},
+      onSettings: () => {},
+      onAbout: () => {},
+      onUserDragStart,
+      onUserDragEnd,
+    }, { windowWidth: 400, windowHeight: 400 })
 
-    expect(onInteractionNeeds).toHaveBeenNthCalledWith(1, 'petted')
-    expect(onInteractionNeeds).toHaveBeenNthCalledWith(2, 'clicked')
+    ipcOnHandlers.get('input:drag-move')!({} as unknown, 50, 60)
+    ipcOnHandlers.get('input:drag-move')!({} as unknown, 60, 70)
+
+    expect(onUserDragStart).toHaveBeenCalledTimes(1)
+    expect(onUserDragEnd).not.toHaveBeenCalled()
+    expect(win.setPosition).toHaveBeenCalled()
+
+    handler.dispose()
+  })
+
+  it('drag-end 结束拖拽（钳制放置）并触发 onUserDragEnd', () => {
+    const { win } = makeFakeWindow()
+    const onUserDragEnd = vi.fn()
+    const handler = new MouseHandler(win, {
+      onHide: () => {},
+      onSettings: () => {},
+      onAbout: () => {},
+      onUserDragEnd,
+    }, { windowWidth: 400, windowHeight: 400 })
+
+    ipcOnHandlers.get('input:drag-move')!({} as unknown, 50, 60)
+    const movesBeforeEnd = (win.setPosition as ReturnType<typeof vi.fn>).mock.calls.length
+    ipcOnHandlers.get('input:drag-end')!({} as unknown, {
+      x: 40,
+      y: 20,
+      width: 320,
+      height: 360,
+    })
+
+    expect(onUserDragEnd).toHaveBeenCalledTimes(1)
+    // 松手后窗口位置被钳制到可见区并落回地面线
+    expect((win.setPosition as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      movesBeforeEnd + 1,
+    )
 
     handler.dispose()
   })

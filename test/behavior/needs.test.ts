@@ -2,18 +2,21 @@ import { describe, it, expect } from 'vitest'
 import {
   NEED_KEYS,
   DEFAULT_NEED_RATES,
+  SLEEP_FATIGUE_RECOVERY_RATE,
   clampNeed,
   clampNeeds,
   advanceNeeds,
   applyNeedDelta,
   getHighNeeds,
   needWeightModifiers,
+  sleepingNeedRates,
   emotionCandidateGroups,
   EMOTION_HIGH_THRESHOLD,
   EMOTION_LOW_THRESHOLD,
   EMOTION_HAPPY_THRESHOLD,
   type NeedRates,
 } from '../../src/main/behavior/needs'
+import { TRANSITION_WEIGHTS } from '../../src/main/behavior/transitions'
 import type { NeedsState } from '../../src/shared/types/needs-state'
 
 const midState: NeedsState = {
@@ -192,17 +195,58 @@ describe('needWeightModifiers (§9.3 need-driven transition)', () => {
     expect(mods['idle_sit']).toBeUndefined()
   })
 
-  it('boosts sleep when fatigue is high', () => {
+  it('boosts sleep path when fatigue is high', () => {
     const state: NeedsState = { hunger: 20, fatigue: 90, happiness: 70, attention: 70 }
     const mods = needWeightModifiers(state)
-    expect(mods['idle_sit']['sleep']).toBeGreaterThan(1)
+    // idle_sit 无直达 sleep 边（§9.2 必经 lie）：增益落在 idle_sit→lie 与 lie→sleep
+    expect(mods['idle_sit']['lie']).toBeGreaterThan(1)
     expect(mods['lie']['sleep']).toBeGreaterThan(1)
   })
 
   it('increases sleep modifier with fatigue severity', () => {
     const low = needWeightModifiers({ hunger: 20, fatigue: 60, happiness: 70, attention: 70 })
     const high = needWeightModifiers({ hunger: 20, fatigue: 95, happiness: 70, attention: 70 })
-    expect(high['idle_sit']['sleep']).toBeGreaterThan(low['idle_sit']['sleep'])
+    expect(high['idle_sit']['lie']).toBeGreaterThan(low['idle_sit']['lie'])
+    expect(high['lie']['sleep']).toBeGreaterThan(low['lie']['sleep'])
+  })
+
+  it('所有倍率只落在 §9.2 边表已有的边上（倍率不能造边）', () => {
+    const mods = needWeightModifiers({ hunger: 95, fatigue: 95, happiness: 5, attention: 5 })
+    for (const [from, targets] of Object.entries(mods)) {
+      for (const to of Object.keys(targets)) {
+        expect(
+          (TRANSITION_WEIGHTS as Record<string, Record<string, number>>)[from]?.[to],
+        ).toBeDefined()
+      }
+    }
+  })
+})
+
+describe('sleepingNeedRates (§9.4 睡眠恢复疲劳)', () => {
+  it('睡眠中 fatigue 以固定恢复速率下降', () => {
+    const rates = sleepingNeedRates(DEFAULT_NEED_RATES)
+    expect(rates.fatigue).toBe(-SLEEP_FATIGUE_RECOVERY_RATE)
+    const slept = advanceNeeds({ hunger: 30, fatigue: 80, happiness: 70, attention: 40 }, 60, rates)
+    expect(slept.fatigue).toBeCloseTo(80 - SLEEP_FATIGUE_RECOVERY_RATE * 60, 5)
+  })
+
+  it('睡眠中其余维度按自然速率推进', () => {
+    const rates = sleepingNeedRates(DEFAULT_NEED_RATES)
+    expect(rates.hunger).toBe(DEFAULT_NEED_RATES.hunger)
+    expect(rates.happiness).toBe(DEFAULT_NEED_RATES.happiness)
+    expect(rates.attention).toBe(DEFAULT_NEED_RATES.attention)
+  })
+
+  it('不叠加性格/夜间倍率：恢复速率与传入速率的疲劳调制无关', () => {
+    const nightDoubled: NeedRates = { ...DEFAULT_NEED_RATES, fatigue: DEFAULT_NEED_RATES.fatigue * 2 }
+    expect(sleepingNeedRates(nightDoubled).fatigue).toBe(-SLEEP_FATIGUE_RECOVERY_RATE)
+  })
+
+  it('长时间睡眠可恢复到 0（钳制生效），疲劳不再钉死 100', () => {
+    const rates = sleepingNeedRates(DEFAULT_NEED_RATES)
+    const hourSec = 60 * 60
+    const slept = advanceNeeds({ hunger: 30, fatigue: 100, happiness: 70, attention: 40 }, hourSec, rates)
+    expect(slept.fatigue).toBe(0)
   })
 })
 

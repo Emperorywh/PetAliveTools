@@ -295,21 +295,6 @@ export class ClipScheduler {
   }
 
   /**
-   * 结束循环交互并回到当前锚定状态。
-   * 不对正在使用的媒体文件做任何修改。
-   */
-  endPreempt(nowMs: number): TickResult {
-    if (this.state.phase === 'cycling' && this.state.cycle) {
-      const cycle = {
-        ...this.state.cycle,
-        queue: { ...this.state.cycle.queue, completed: true },
-      }
-      this.state = this.transitionToIdlePreservingFsm(cycle, nowMs)
-    }
-    return this.result([], false, false)
-  }
-
-  /**
    * 规划下一个普通行为周期。
    * 微随机只保留变体、空闲时长与稀有动作，不再改变视频速率或位置。
    * 插入优先级：稀有招牌动作 → 需求驱动的情绪动作 → FSM 概率转移。

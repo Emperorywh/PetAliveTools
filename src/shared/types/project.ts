@@ -20,6 +20,11 @@ export interface ProjectData {
   readonly behaviorConfig: BehaviorConfig
   /** clips/ 扫描得到的直接播放片段 */
   readonly clips: readonly ClipMeta[]
+  /**
+   * clips/ 中扩展名可播放、但命名无法映射到动作清单的视频文件。
+   * 不参与调度；导入窗口展示它们并提供删除入口（清理清单变更后的遗留片段）
+   */
+  readonly unrecognizedVideos: readonly string[]
   /** audio.meta.json — 音频素材元数据数组 */
   readonly audio: readonly AudioMeta[]
 }

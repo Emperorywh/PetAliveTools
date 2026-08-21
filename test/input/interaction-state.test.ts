@@ -3,7 +3,6 @@ import {
   createInteractionState,
   createInteractionContext,
   processInput,
-  DEFAULT_PETTING_MOVE_THRESHOLD,
   DEFAULT_DRAG_MOVE_THRESHOLD,
   type InteractionState,
   type InteractionContext,
@@ -94,64 +93,54 @@ describe('hover → idle: cursor exits buffer zone (§6.1)', () => {
 })
 
 // ============================================================
-// hover → petting (抚摸检测, §10)
+// hover 内移动（悬停不抢占、不切换片段）
 // ============================================================
 
-describe('hover → petting: cursor in hitbox + movement (§10)', () => {
-  it('movement inside hitbox triggers preempt petted', () => {
+describe('hover: cursor moves inside hitbox (悬停不切换视频)', () => {
+  it('movement inside hitbox stays hover and emits no actions', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 }, // enter hover (in hitbox)
-      { type: 'move', x: 205, y: 200 }, // accumulate 5px > threshold 3
-    ])
-    expect(result.state.phase).toBe('petting')
-    expect(result.state.activePreempt).toBe('petted')
-    const preempt = result.actions.find(
-      (a) => a.kind === 'preempt',
-    )
-    expect(preempt).toBeDefined()
-    expect(preempt!.kind === 'preempt' && preempt!.interaction).toBe('petted')
-  })
-
-  it('insufficient movement does not trigger petting', () => {
-    const result = processSequence([
-      { type: 'move', x: 200, y: 200 }, // enter hover
-      { type: 'move', x: 201, y: 200 }, // only 1px < threshold 3
+      { type: 'move', x: 205, y: 200 }, // 5px movement, previously petting threshold
     ])
     expect(result.state.phase).toBe('hover')
-    expect(hasAction(result.actions, 'preempt')).toBe(false)
+    expect(hasAction(result.actions, 'drag_move')).toBe(false)
+    expect(hasAction(result.actions, 'drag_end')).toBe(false)
   })
 
-  it('movement outside hitbox (buffer only) does not accumulate', () => {
+  it('continuous movement across hitbox emits no actions', () => {
     const result = processSequence([
-      { type: 'move', x: 95, y: 200 }, // in buffer, not hitbox
-      { type: 'move', x: 96, y: 200 },
-      { type: 'move', x: 97, y: 200 },
-      { type: 'move', x: 98, y: 200 }, // moved 3px but in buffer zone only
-    ])
-    expect(result.state.phase).toBe('hover')
-    expect(hasAction(result.actions, 'preempt')).toBe(false)
-  })
-
-  it('petting ends when cursor exits hitbox but stays in buffer', () => {
-    const result = processSequence([
-      { type: 'move', x: 200, y: 200 }, // hover
-      { type: 'move', x: 205, y: 200 }, // petting triggered
-      { type: 'move', x: 95, y: 200 }, // exit hitbox, stay in buffer
-    ])
-    expect(result.state.phase).toBe('hover')
-    expect(result.state.activePreempt).toBeNull()
-    expect(hasAction(result.actions, 'end_preempt')).toBe(true)
-  })
-
-  it('petting ends when cursor exits buffer zone', () => {
-    const result = processSequence([
+      { type: 'move', x: 105, y: 200 },
+      { type: 'move', x: 150, y: 200 },
       { type: 'move', x: 200, y: 200 },
-      { type: 'move', x: 205, y: 200 }, // petting
+      { type: 'move', x: 250, y: 200 },
+      { type: 'move', x: 290, y: 200 },
+    ])
+    expect(result.state.phase).toBe('hover')
+    expect(hasAction(result.actions, 'drag_move')).toBe(false)
+    expect(hasAction(result.actions, 'drag_end')).toBe(false)
+  })
+
+  it('cursor exiting buffer from hitbox exits interactive', () => {
+    const result = processSequence([
+      { type: 'move', x: 200, y: 200 }, // hover in hitbox
+      { type: 'move', x: 205, y: 200 }, // movement inside hitbox
       { type: 'move', x: 50, y: 200 }, // exit buffer
     ])
     expect(result.state.phase).toBe('idle')
-    expect(hasAction(result.actions, 'end_preempt')).toBe(true)
     expect(hasAction(result.actions, 'exit_interactive')).toBe(true)
+    expect(hasAction(result.actions, 'drag_end')).toBe(false)
+  })
+
+  it('hover movement inside hitbox then click emits nothing (点击不切换视频)', () => {
+    const result = processSequence([
+      { type: 'move', x: 200, y: 200 },
+      { type: 'move', x: 205, y: 200 },
+      { type: 'down', x: 200, y: 200 },
+      { type: 'up', x: 200, y: 200 },
+    ])
+    expect(result.state.phase).toBe('hover')
+    // 除进入缓冲带的 enter_interactive 外无任何动作
+    expect(result.actions).toEqual([{ kind: 'enter_interactive' }])
   })
 })
 
@@ -159,26 +148,25 @@ describe('hover → petting: cursor in hitbox + movement (§10)', () => {
 // click detection (§10)
 // ============================================================
 
-describe('click: mousedown + mouseup on hitbox → preempt clicked (§10)', () => {
-  it('click on hitbox triggers preempt clicked', () => {
+describe('click: mousedown + mouseup on hitbox（点击不切换视频）', () => {
+  it('click on hitbox returns to hover without actions', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 }, // hover (in hitbox)
       { type: 'down', x: 200, y: 200 }, // press
       { type: 'up', x: 200, y: 200 }, // release on hitbox = click
     ])
     expect(result.state.phase).toBe('hover')
-    const preempt = result.actions.find((a) => a.kind === 'preempt')
-    expect(preempt).toBeDefined()
-    expect(preempt!.kind === 'preempt' && preempt!.interaction).toBe('clicked')
+    // 除进入缓冲带的 enter_interactive 外无任何动作
+    expect(result.actions).toEqual([{ kind: 'enter_interactive' }])
   })
 
-  it('mouseup outside hitbox does not trigger click', () => {
+  it('mouseup outside hitbox also returns to hover without actions', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 },
       { type: 'down', x: 200, y: 200 },
       { type: 'up', x: 95, y: 200 }, // release in buffer, not hitbox
     ])
-    expect(hasAction(result.actions, 'preempt')).toBe(false)
+    expect(result.actions).toEqual([{ kind: 'enter_interactive' }])
     expect(result.state.phase).toBe('hover')
   })
 
@@ -196,18 +184,16 @@ describe('click: mousedown + mouseup on hitbox → preempt clicked (§10)', () =
 // drag detection (§7.5)
 // ============================================================
 
-describe('drag: mousedown + movement → preempt dragged (§7.5)', () => {
-  it('drag beyond threshold triggers preempt dragged', () => {
+describe('drag: mousedown + movement → window follow only (§7.5)', () => {
+  it('drag beyond threshold enters dragging with drag_move, no clip switch', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 }, // hover
       { type: 'down', x: 200, y: 200 }, // press
       { type: 'move', x: 210, y: 200 }, // 10px > drag threshold 5
     ])
     expect(result.state.phase).toBe('dragging')
-    expect(result.state.activePreempt).toBe('dragged')
-    const preempt = result.actions.find((a) => a.kind === 'preempt')
-    expect(preempt).toBeDefined()
-    expect(preempt!.kind === 'preempt' && preempt!.interaction).toBe('dragged')
+    expect(hasAction(result.actions, 'drag_move')).toBe(true)
+    expect(hasAction(result.actions, 'drag_end')).toBe(false)
   })
 
   it('drag_move action emitted with cursor position', () => {
@@ -229,7 +215,7 @@ describe('drag: mousedown + movement → preempt dragged (§7.5)', () => {
       { type: 'move', x: 203, y: 200 }, // 3px < threshold 5
     ])
     expect(result.state.phase).toBe('pressing')
-    expect(hasAction(result.actions, 'preempt')).toBe(false)
+    expect(hasAction(result.actions, 'drag_move')).toBe(false)
   })
 
   it('drag continues emitting drag_move on each move', () => {
@@ -244,14 +230,14 @@ describe('drag: mousedown + movement → preempt dragged (§7.5)', () => {
     expect(dragMoves.length).toBe(3)
   })
 
-  it('drag release (mouseup) ends preempt', () => {
+  it('drag release (mouseup) emits drag_end', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 },
       { type: 'down', x: 200, y: 200 },
       { type: 'move', x: 210, y: 200 }, // drag
       { type: 'up', x: 210, y: 200 }, // release
     ])
-    expect(hasAction(result.actions, 'end_preempt')).toBe(true)
+    expect(hasAction(result.actions, 'drag_end')).toBe(true)
     // cursor still in buffer → stay interactive (hover)
     expect(result.state.phase).toBe('hover')
   })
@@ -263,51 +249,28 @@ describe('drag: mousedown + movement → preempt dragged (§7.5)', () => {
       { type: 'move', x: 210, y: 200 },
       { type: 'up', x: 50, y: 200 }, // release outside buffer
     ])
-    expect(hasAction(result.actions, 'end_preempt')).toBe(true)
+    expect(hasAction(result.actions, 'drag_end')).toBe(true)
     expect(hasAction(result.actions, 'exit_interactive')).toBe(true)
     expect(result.state.phase).toBe('idle')
   })
 })
 
 // ============================================================
-// petting → pressing → drag transition
+// hover → drag after prior movement（悬停移动后拖拽不受影响）
 // ============================================================
 
-describe('petting → drag transition', () => {
-  it('drag from petting ends petted preempt then starts dragged', () => {
+describe('hover → drag transition', () => {
+  it('drag after moving inside hitbox only emits drag_move', () => {
     const result = processSequence([
       { type: 'move', x: 200, y: 200 }, // hover
-      { type: 'move', x: 205, y: 200 }, // petting
-      { type: 'down', x: 200, y: 200 }, // press while petting
+      { type: 'move', x: 205, y: 200 }, // movement inside hitbox (no action)
+      { type: 'down', x: 200, y: 200 }, // press
       { type: 'move', x: 210, y: 200 }, // drag
     ])
     expect(result.state.phase).toBe('dragging')
-    expect(result.state.activePreempt).toBe('dragged')
-    // end_preempt for petted, then preempt for dragged
-    const endPreempts = result.actions.filter((a) => a.kind === 'end_preempt')
-    expect(endPreempts.length).toBe(1)
-    const preempts = result.actions.filter((a) => a.kind === 'preempt')
-    expect(preempts.length).toBe(2)
-  })
-})
-
-// ============================================================
-// petting → click transition
-// ============================================================
-
-describe('petting → click transition', () => {
-  it('click from petting ends petted preempt then starts clicked', () => {
-    const result = processSequence([
-      { type: 'move', x: 200, y: 200 },
-      { type: 'move', x: 205, y: 200 }, // petting
-      { type: 'down', x: 200, y: 200 },
-      { type: 'up', x: 200, y: 200 }, // click
-    ])
-    expect(hasAction(result.actions, 'end_preempt')).toBe(true)
-    const clickedPreempt = result.actions.find(
-      (a) => a.kind === 'preempt' && a.kind === 'preempt' && 'interaction' in a && a.interaction === 'clicked',
-    )
-    expect(clickedPreempt).toBeDefined()
+    expect(hasAction(result.actions, 'drag_end')).toBe(false)
+    const dragMoves = result.actions.filter((a) => a.kind === 'drag_move')
+    expect(dragMoves.length).toBe(1)
   })
 })
 
@@ -332,27 +295,6 @@ describe('pressing cancel: cursor leaves buffer while pressed', () => {
 // ============================================================
 
 describe('custom thresholds', () => {
-  it('custom petting threshold', () => {
-    const c = ctx({ pettingMoveThreshold: 10 })
-    const result = processSequence(
-      [
-        { type: 'move', x: 200, y: 200 },
-        { type: 'move', x: 205, y: 200 }, // 5px < 10
-      ],
-      c,
-    )
-    expect(result.state.phase).toBe('hover')
-
-    const result2 = processSequence(
-      [
-        { type: 'move', x: 200, y: 200 },
-        { type: 'move', x: 215, y: 200 }, // 15px > 10
-      ],
-      c,
-    )
-    expect(result2.state.phase).toBe('petting')
-  })
-
   it('custom drag threshold', () => {
     const c = ctx({ dragMoveThreshold: 20 })
     const result = processSequence(
@@ -382,10 +324,6 @@ describe('custom thresholds', () => {
 // ============================================================
 
 describe('default thresholds', () => {
-  it('petting move threshold is 3', () => {
-    expect(DEFAULT_PETTING_MOVE_THRESHOLD).toBe(3)
-  })
-
   it('drag move threshold is 5', () => {
     expect(DEFAULT_DRAG_MOVE_THRESHOLD).toBe(5)
   })
@@ -415,24 +353,21 @@ describe('buffer zone size affects activation (§6.1 8–12px)', () => {
 // 回归：undefined 覆盖不得击穿默认阈值
 // （InteractionHandler 把可选配置全部展开传入，未配置的阈值
 //   以显式 undefined 到达；展开合并会覆盖默认值，导致
-//   `dist >= undefined` 恒为 false，抚摸/拖拽永不触发）
+//   `dist >= undefined` 恒为 false，拖拽永不触发）
 // ============================================================
 
 describe('createInteractionContext: undefined overrides fall back to defaults', () => {
   it('显式 undefined 阈值回落默认值（不再被展开覆盖）', () => {
     const c = ctx({
       bufferPx: 10,
-      pettingMoveThreshold: undefined,
       dragMoveThreshold: undefined,
     })
-    expect(c.pettingMoveThreshold).toBe(DEFAULT_PETTING_MOVE_THRESHOLD)
     expect(c.dragMoveThreshold).toBe(DEFAULT_DRAG_MOVE_THRESHOLD)
   })
 
   it('undefined 阈值上下文中按住 + 移动 6px 触发拖拽（运行时回归场景）', () => {
     const c = ctx({
       bufferPx: 10,
-      pettingMoveThreshold: undefined,
       dragMoveThreshold: undefined,
     })
     const result = processSequence(
@@ -447,10 +382,9 @@ describe('createInteractionContext: undefined overrides fall back to defaults', 
     expect(hasAction(result.actions, 'drag_move')).toBe(true)
   })
 
-  it('undefined 阈值上下文中命中盒内移动触发抚摸（运行时回归场景）', () => {
+  it('undefined 阈值上下文中命中盒内移动不触发抢占（悬停不切换视频）', () => {
     const c = ctx({
       bufferPx: 10,
-      pettingMoveThreshold: undefined,
       dragMoveThreshold: undefined,
     })
     const result = processSequence(
@@ -460,7 +394,7 @@ describe('createInteractionContext: undefined overrides fall back to defaults', 
       ],
       c,
     )
-    expect(result.state.phase).toBe('petting')
-    expect(hasAction(result.actions, 'preempt')).toBe(true)
+    expect(result.state.phase).toBe('hover')
+    expect(hasAction(result.actions, 'preempt')).toBe(false)
   })
 })

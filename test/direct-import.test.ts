@@ -132,10 +132,31 @@ describe('原样片段导入', () => {
     expect(reImported.fileName).toBe('idle_sit__none__01.mp4')
   })
 
-  it('拒绝删除携带路径分隔符或不可识别的文件', async () => {
+  it('拒绝删除携带路径分隔符或非视频文件', async () => {
     await expect(deleteClipDirectly(projectDir, '../outside.mp4')).rejects.toThrow('片段文件名不合法')
     await expect(deleteClipDirectly(projectDir, 'a\\b.mp4')).rejects.toThrow('片段文件名不合法')
-    await expect(deleteClipDirectly(projectDir, 'persona.json')).rejects.toThrow('不是可识别的导入片段')
+    await expect(deleteClipDirectly(projectDir, 'persona.json')).rejects.toThrow('只能删除 clips/ 内的视频文件')
+  })
+
+  it('可删除命名无法识别的遗留视频文件（清单变更后的孤儿片段）', async () => {
+    const sourcePath = path.join(temporaryRoot, 'prepared.mp4')
+    await fs.writeFile(sourcePath, Buffer.from('clip'))
+    const imported = await copyClipDirectly(projectDir, {
+      sourcePath,
+      state: 'idle_sit',
+      direction: 'none',
+    })
+    // 模拟状态已从动作清单移除的旧片段：直接放入按旧状态命名的文件
+    const clipsDir = getProjectPaths(projectDir).clipsDir
+    await fs.copyFile(
+      path.join(clipsDir, imported.fileName),
+      path.join(clipsDir, 'petted__none__01.mp4'),
+    )
+
+    const result = await deleteClipDirectly(projectDir, 'petted__none__01.mp4')
+
+    expect(result.clipsCount).toBe(1)
+    await expect(fs.access(path.join(clipsDir, 'petted__none__01.mp4'))).rejects.toThrow()
   })
 })
 

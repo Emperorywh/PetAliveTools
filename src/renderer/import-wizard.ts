@@ -4,6 +4,7 @@
  * 用户只需选择动作和已制作完成的视频文件；窗口不会加载视频画面、
  * 抽取帧、预览抠像、设置裁剪或循环点，也不会发起转码。
  * 已导入片段可按文件删除或整组清空，删除只移除 clips/ 中的文件；
+ * 命名不在动作清单内的遗留视频文件单独列出，仅提供删除清理入口；
  * 每行附带预览按钮，把该片段交给桌面宠物按运行时链路播放（调试用）。
  */
 
@@ -146,15 +147,15 @@ export class ImportWizard {
    * 删除 clips/ 中的片段文件后重新扫描目录，使计数立即刷新。
    * 删除只移除文件并更新运行时映射，不触发任何视频处理。
    */
-  private async deleteClips(clips: readonly ClipMeta[]): Promise<void> {
-    if (!this.projectDir || this.busy || clips.length === 0) return
-    const target = clips.length === 1 ? clips[0]!.fileName : `${clips.length} 个片段`
+  private async deleteClips(fileNames: readonly string[]): Promise<void> {
+    if (!this.projectDir || this.busy || fileNames.length === 0) return
+    const target = fileNames.length === 1 ? fileNames[0]! : `${fileNames.length} 个片段`
     this.busy = true
     this.message = `正在删除：${target}`
     this.render()
     try {
-      for (const clip of clips) {
-        await window.petalive.import.deleteClip(this.projectDir, clip.fileName)
+      for (const fileName of fileNames) {
+        await window.petalive.import.deleteClip(this.projectDir, fileName)
       }
       this.projectData = await window.petalive.import.loadProject(this.projectDir)
       this.message = `已删除：${target}`
@@ -237,7 +238,52 @@ export class ImportWizard {
       }
       wrapper.appendChild(section)
     }
+
+    const unrecognized = this.renderUnrecognizedSection()
+    if (unrecognized) wrapper.appendChild(unrecognized)
     return wrapper
+  }
+
+  /**
+   * 渲染无法识别的视频文件清理区。
+   * 这些文件的命名不在当前动作清单内（典型来源：状态已从清单移除的
+   * 旧片段），调度器不会播放它们；仅提供删除入口，不提供重命名映射。
+   */
+  private renderUnrecognizedSection(): HTMLElement | null {
+    const files = this.projectData?.unrecognizedVideos ?? []
+    if (files.length === 0) return null
+
+    const section = element('section', 'direct-panel')
+    section.appendChild(element('h2', '', `无法识别的片段文件（${files.length} 个）`))
+    section.appendChild(
+      element(
+        'p',
+        'direct-subtitle',
+        '以下视频文件的命名不在当前动作清单内，不会被调度播放。它们通常是动作清单调整后遗留的旧片段，可删除清理。',
+      ),
+    )
+    const list = element('div', 'direct-clips')
+    for (const fileName of files) {
+      const line = element('div', 'direct-clip-line')
+      line.appendChild(element('code', '', fileName))
+      const remove = button('删除', () => void this.deleteClips([fileName]))
+      remove.className = 'direct-danger'
+      remove.disabled = this.busy
+      line.appendChild(remove)
+      list.appendChild(line)
+    }
+    if (files.length > 1) {
+      const removeAll = button(`全部删除（${files.length} 个）`, () => {
+        if (window.confirm(`确定删除全部 ${files.length} 个无法识别的片段文件吗？`)) {
+          void this.deleteClips(files)
+        }
+      })
+      removeAll.className = 'direct-danger direct-remove-all'
+      removeAll.disabled = this.busy
+      list.appendChild(removeAll)
+    }
+    section.appendChild(list)
+    return section
   }
 
   /**
@@ -365,7 +411,7 @@ export class ImportWizard {
       const preview = button('预览', () => void this.previewClip(clip))
       preview.disabled = this.busy
       line.appendChild(preview)
-      const remove = button('删除', () => void this.deleteClips([clip]))
+      const remove = button('删除', () => void this.deleteClips([clip.fileName]))
       remove.className = 'direct-danger'
       remove.disabled = this.busy
       line.appendChild(remove)
@@ -374,7 +420,7 @@ export class ImportWizard {
     if (clips.length > 1) {
       const removeAll = button(`全部删除（${clips.length} 个）`, () => {
         if (window.confirm(`确定删除「${item.label}」的全部 ${clips.length} 个片段吗？`)) {
-          void this.deleteClips(clips)
+          void this.deleteClips(clips.map((clip) => clip.fileName))
         }
       })
       removeAll.className = 'direct-danger direct-remove-all'

@@ -73,9 +73,9 @@ export function rhythmWeightModifiers(
   const activityPenalty = 1 / (1 + (boost - 1) * 0.5) // boost=3.0 → ~0.5
 
   return {
-    // 夜间睡眠权重大幅增加
+    // 夜间入睡路径权重大幅增加（idle_sit 无直达 sleep 边，经 idle_sit→lie 引导）
     lie: { sleep: boost },
-    idle_sit: { lie: boost * 0.8, sleep: boost, stand: activityPenalty, walk: activityPenalty },
+    idle_sit: { lie: boost * 0.8, stand: activityPenalty },
     stand: { walk: activityPenalty, idle_sit: boost * 0.6 },
     // 行走时更倾向回静止
     walk: { stand: boost * 0.7 },

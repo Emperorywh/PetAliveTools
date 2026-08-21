@@ -170,32 +170,6 @@ export const SHOOTING_LIST: readonly ShootingListItem[] = [
 
   // ── B. 互动响应 ── //
   {
-    state: 'petted',
-    label: '被抚摸享受',
-    category: 'B',
-    required: false,
-    startupSet: false,
-    direction: 'none',
-    loop: false,
-    anchor: 'sit',
-    suggestedVariants: 1,
-    suggestedVariantsMax: 2,
-    description: '眯眼 / 呼噜 / 蹭手等最终成片',
-  },
-  {
-    state: 'clicked',
-    label: '抬头看镜头（点击呼应）',
-    category: 'B',
-    required: false,
-    startupSet: false,
-    direction: 'none',
-    loop: false,
-    anchor: 'sit',
-    suggestedVariants: 1,
-    suggestedVariantsMax: 1,
-    description: '点击呼应',
-  },
-  {
     state: 'called',
     label: '被呼唤转身',
     category: 'B',
@@ -207,19 +181,6 @@ export const SHOOTING_LIST: readonly ShootingListItem[] = [
     suggestedVariants: 1,
     suggestedVariantsMax: 1,
     description: '被呼唤转身',
-  },
-  {
-    state: 'dragged',
-    label: '被抱起 / 悬空（拖拽反应）',
-    category: 'B',
-    required: false,
-    startupSet: false,
-    direction: 'none',
-    loop: false,
-    anchor: 'none',
-    suggestedVariants: 1,
-    suggestedVariantsMax: 1,
-    description: '拖拽反应 + 松手落回地面',
   },
 
   // ── D. 情绪 / 需求表达 ── //
@@ -287,19 +248,6 @@ export const SHOOTING_LIST: readonly ShootingListItem[] = [
     suggestedVariants: 1,
     suggestedVariantsMax: 2,
     description: '开心',
-  },
-  {
-    state: 'annoyed',
-    label: '烦躁',
-    category: 'D',
-    required: false,
-    startupSet: false,
-    direction: 'none',
-    loop: false,
-    anchor: 'sit',
-    suggestedVariants: 1,
-    suggestedVariantsMax: 2,
-    description: '烦躁',
   },
 ] as const
 

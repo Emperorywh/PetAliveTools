@@ -25,14 +25,18 @@ export interface InputBridge {
   enterInteractive(): void
   /** 退出到穿透态：setIgnoreMouseEvents(true, {forward:true}) (§6.1) */
   exitInteractive(): void
-  /** 抢占：触发交互片段 (petted/clicked/dragged) */
-  preempt(interaction: string): void
-  /** 结束抢占：结束循环交互片段；回传当前命中盒供拖拽放置钳制 (§7.3) */
-  endPreempt(hitbox: PixelRect): void
   /** 拖拽位移：通知主进程光标在窗口内的位置 */
   dragMove(x: number, y: number): void
+  /** 结束拖拽：钳制放置并落回地面线；回传当前命中盒 (§7.3) */
+  dragEnd(hitbox: PixelRect): void
   /** 弹出右键上下文菜单 (§10) */
   contextMenu(): void
+  /** 菜单窗口：选中动作，回传主进程执行对应回调 */
+  menuSelect(action: string): void
+  /** 菜单窗口：请求关闭（Esc/点击空白区） */
+  menuClose(): void
+  /** 菜单窗口：回报实际内容尺寸，主进程据此重设窗口并显示 */
+  menuSize(width: number, height: number): void
 }
 
 /** 音频 IPC 桥接接口 (§11) */
@@ -92,6 +96,8 @@ export interface SchedulerBridge {
   reportClipEnded(clipId: string): void
   /** 监听素材库为空指引（§13 不崩溃，弹引导采集） */
   onShowGuidance(callback: () => void): void
+  /** 全部监听器注册完毕后通知主进程（就绪握手：主进程此时才开始下发调度命令） */
+  notifyReady(): void
 }
 
 /** 宠物 profile IPC 桥接接口 (§12.2, IR-017) */
@@ -143,10 +149,13 @@ contextBridge.exposeInMainWorld('petalive', {
   input: {
     enterInteractive: () => ipcRenderer.send('input:enter-interactive'),
     exitInteractive: () => ipcRenderer.send('input:exit-interactive'),
-    preempt: (interaction: string) => ipcRenderer.send('input:preempt', interaction),
-    endPreempt: (hitbox: PixelRect) => ipcRenderer.send('input:end-preempt', hitbox),
     dragMove: (x: number, y: number) => ipcRenderer.send('input:drag-move', x, y),
+    dragEnd: (hitbox: PixelRect) => ipcRenderer.send('input:drag-end', hitbox),
     contextMenu: () => ipcRenderer.send('input:context-menu'),
+    menuSelect: (action: string) => ipcRenderer.send('input:menu-select', action),
+    menuClose: () => ipcRenderer.send('input:menu-close'),
+    menuSize: (width: number, height: number) =>
+      ipcRenderer.send('input:menu-size', width, height),
   } satisfies InputBridge,
   audio: {
     onPlaySound: (callback: (file: string, volume: number) => void) => {
@@ -199,6 +208,7 @@ contextBridge.exposeInMainWorld('petalive', {
     onShowGuidance: (callback: () => void) => {
       ipcRenderer.on('scheduler:guidance', () => callback())
     },
+    notifyReady: () => ipcRenderer.send('scheduler:renderer-ready'),
   } satisfies SchedulerBridge,
   profile: {
     onSwitched: (callback: (id: string, name: string) => void) => {

@@ -41,6 +41,7 @@ export const SCHEDULER_IPC = {
   easing: 'scheduler:easing',
   guidance: 'scheduler:guidance',
   clipEnded: 'scheduler:clip-ended',
+  rendererReady: 'scheduler:renderer-ready',
 } as const
 
 /**
@@ -81,10 +82,12 @@ export class SchedulerCommandDispatcher {
   private lastIdleKeepAliveClipId: string | null = null
   /** 当前正在播放的 embeddedAudio 片段 id（IR-010 切换检测） */
   private playingEmbeddedClipId: string | null = null
+  /** 最近一次发往渲染层的播放载荷（就绪握手重放用） */
+  private lastPlayPayload: PlayClipPayload | null = null
 
   constructor(private readonly deps: SchedulerDispatcherDeps) {}
 
-  /** 分发一批渲染命令（来自 tick / completeCurrentPlayback / preempt / endPreempt） */
+  /** 分发一批渲染命令（来自 tick / completeCurrentPlayback / preempt） */
   dispatch(commands: readonly RenderCommand[]): void {
     const win = this.deps.getWindow()
     if (!win || win.isDestroyed()) return
@@ -113,6 +116,19 @@ export class SchedulerCommandDispatcher {
 
   // —— 各命令分发 —— //
 
+  /**
+   * 渲染层（重）就绪后重放最近一次播放载荷。
+   *
+   * 覆盖两类场景：启动期首个 play 早于渲染层监听器注册而丢失时补发；
+   * dev 整页重载后渲染层重新注册监听器时恢复画面。
+   * 尚未发送过任何播放载荷时为无操作。
+   */
+  replayToRenderer(): void {
+    const win = this.deps.getWindow()
+    if (!win || win.isDestroyed() || !this.lastPlayPayload) return
+    win.webContents.send(SCHEDULER_IPC.play, this.lastPlayPayload)
+  }
+
   /** play → scheduler:play (IR-002 结构化载荷) + 动作声 (IR-009) */
   private dispatchPlay(win: BrowserWindow, clip: ClipMeta): void {
     if (isPlaceholderClip(clip)) return
@@ -125,7 +141,7 @@ export class SchedulerCommandDispatcher {
       this.deps.onEmbeddedAudioEnded?.()
     }
 
-    win.webContents.send(SCHEDULER_IPC.play, payload)
+    this.sendPlayPayload(win, payload)
 
     // IR-009：调度器自主播放同样触发动作声 (§11.1)，冷却/上限由音频协调器约束
     this.playingEmbeddedClipId = clip.embeddedAudio ? clip.id : null
@@ -141,6 +157,7 @@ export class SchedulerCommandDispatcher {
     if (isPlaceholderClip(clip)) return
     const payload = this.buildPlayPayload(clip)
     if (!payload) return
+    this.lastPlayPayload = payload
     const fadePayload: FadeInPayload = { clip: payload, durationMs }
     win.webContents.send(SCHEDULER_IPC.fadeIn, fadePayload)
   }
@@ -177,10 +194,16 @@ export class SchedulerCommandDispatcher {
     if (!payload) return
     this.lastIdleKeepAliveAtMs = nowMs
     this.lastIdleKeepAliveClipId = clip.id
-    win.webContents.send(SCHEDULER_IPC.play, payload)
+    this.sendPlayPayload(win, payload)
   }
 
   // —— 载荷构建 —— //
+
+  /** 发送播放载荷并记录为最近一次播放（就绪握手重放用） */
+  private sendPlayPayload(win: BrowserWindow, payload: PlayClipPayload): void {
+    this.lastPlayPayload = payload
+    win.webContents.send(SCHEDULER_IPC.play, payload)
+  }
 
   /** 构建结构化播放载荷 (IR-002)；项目目录缺失时返回 null */
   private buildPlayPayload(clip: ClipMeta): PlayClipPayload | null {

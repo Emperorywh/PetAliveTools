@@ -14,8 +14,11 @@ export {
   saveProject,
   validateProject,
   createDefaultPersona,
+  tryReadNeedsState,
 } from './project-io'
 export type { ProjectPaths } from './project-io'
+
+export { writeJsonAtomic } from './atomic-write'
 
 export {
   PLACEHOLDER_CLIP_ID,
