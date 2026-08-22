@@ -3,15 +3,16 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { WalkController } from '../../src/main/scheduler/walk-controller'
 import type { Rect, SpriteBounds } from '../../src/shared/spatial'
 
-/** 假窗口：记录 setPosition 调用（DIP 坐标） */
+/** 假窗口：记录 setBounds 调用（DIP 坐标）；getBounds 尺寸恒为固定 400×400 */
 function makeFakeWindow(initialX = 500) {
   const state = { x: initialX, y: 600, destroyed: false, moved: 0 }
   const win = {
     isDestroyed: () => state.destroyed,
     getPosition: (): [number, number] => [state.x, state.y],
-    setPosition: (x: number, y: number) => {
-      state.x = x
-      state.y = y
+    getBounds: () => ({ x: state.x, y: state.y, width: 400, height: 400 }),
+    setBounds: (b: { x: number; y: number; width: number; height: number }) => {
+      state.x = b.x
+      state.y = b.y
       state.moved += 1
     },
   }

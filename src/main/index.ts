@@ -15,6 +15,7 @@ import {
   createImportWizardWindow,
   createSettingsWindow,
   setInteractive,
+  setPetWindowPosition,
 } from './window'
 import { createTray } from './tray'
 import {
@@ -870,7 +871,7 @@ function movePetToVisibleArea(): void {
   const currentX = mainWindow.getPosition()[0]
   const x = clampWindowX(bounds, currentX, WINDOW_WIDTH)
   const y = groundedWindowY(bounds.groundLine, SPRITE_BASE_Y)
-  mainWindow.setPosition(Math.round(x), Math.round(y), false)
+  setPetWindowPosition(mainWindow, x, y)
 }
 
 /**

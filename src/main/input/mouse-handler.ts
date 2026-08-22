@@ -4,7 +4,7 @@
  * 接收来自渲染进程的交互动作（IPC），执行窗口操作：
  *   - enter/exit interactive → setIgnoreMouseEvents 切换 (§6.1)
  *   - drag_move → 开始/继续拖拽，窗口跟随光标 (§7.3，spatial/drag 纯逻辑)
- *   - drag_end → 结束拖拽：钳制可见区、落回地面线 (§7.3)
+ *   - drag_end → 结束拖拽：按精灵可见范围钳制 x/y 到工作区 (§7.3)
  *   - context_menu → 弹出右键菜单（喂食/给玩具/呼唤等显式动作仍经调度抢占）
  *
  * 鼠标交互不切换视频片段：调度器按自身节律继续播放，
@@ -14,7 +14,7 @@
  */
 
 import { ipcMain, BrowserWindow, screen } from 'electron'
-import { setInteractive } from '../window'
+import { setInteractive, setPetWindowPosition } from '../window'
 import { showContextMenu } from './context-menu'
 import { computeGroundLine } from '../../shared/spatial'
 import { defaultHitboxPx } from '../../shared/input'
@@ -171,6 +171,8 @@ export class MouseHandler {
    *
    * 渲染进程发送光标在窗口内的局部坐标，主进程换算为屏幕坐标后
    * 使用 spatial/drag 的 dragFollow 计算窗口新位置。
+   * 移动经 setPetWindowPosition 钉住窗口尺寸（分数缩放下 setPosition
+   * 会逐次撑大窗口，拖拽的连续调用会让视频看起来不断放大）。
    */
   private handleDragMove(localX: number, localY: number): void {
     if (!this.dragState || this.dragState.phase !== 'dragging') return
@@ -180,14 +182,12 @@ export class MouseHandler {
     const screenCursor = { x: winBounds.x + localX, y: winBounds.y + localY }
 
     this.dragState = dragFollow(this.dragState, screenCursor)
-    this.window.setPosition(
-      Math.round(this.dragState.windowPos.x),
-      Math.round(this.dragState.windowPos.y),
-    )
+    setPetWindowPosition(this.window, this.dragState.windowPos.x, this.dragState.windowPos.y)
   }
 
   /**
-   * 结束拖拽：松手后按精灵可见范围钳制 x、足部落回地面线 (§7.3/§7.1)。
+   * 结束拖拽：窗口停在松手位置，x/y 按精灵可见范围钳制到工作区 (§7.3)；
+   * 拖过底边时最多落到地面线 (§7.1)。
    *
    * @param hitbox 渲染进程在结束抢占时回传的当前命中盒（窗口局部像素）
    */
@@ -200,10 +200,7 @@ export class MouseHandler {
     this.dragState = releaseDrag(this.dragState, bounds, this.resolveSpriteBounds(hitbox))
 
     if (!this.window.isDestroyed()) {
-      this.window.setPosition(
-        Math.round(this.dragState.windowPos.x),
-        Math.round(this.dragState.windowPos.y),
-      )
+      setPetWindowPosition(this.window, this.dragState.windowPos.x, this.dragState.windowPos.y)
     }
 
     this.dragState = null

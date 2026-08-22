@@ -56,14 +56,14 @@ describe('pickupDrag → dragFollow (§7.3 拾取 → 跟随光标)', () => {
 })
 
 describe('releaseDrag (§7.3 松手停在放置位置)', () => {
-  it('stays at drop x, feet land on the ground line', () => {
+  it('stays at the drop position when inside the work area', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 550, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 400 })
-    // window at (550, 350) — x within sprite bounds; y → groundLine - 380 = 700
+    // window at (550, 350) — 松手位置即放置位置，y 不再落回地面线
     const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.phase).toBe('idle')
-    expect(s3.windowPos).toEqual({ x: 550, y: 700 })
+    expect(s3.windowPos).toEqual({ x: 550, y: 350 })
     expect(s3.grabOffset).toBeNull()
   })
 
@@ -75,7 +75,7 @@ describe('releaseDrag (§7.3 松手停在放置位置)', () => {
     const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.phase).toBe('idle')
     expect(s3.windowPos.x).toBe(1560)
-    expect(s3.windowPos.y).toBe(700)
+    expect(s3.windowPos.y).toBe(350)
   })
 
   it('allows the window to overhang the left screen edge', () => {
@@ -85,22 +85,23 @@ describe('releaseDrag (§7.3 松手停在放置位置)', () => {
     // window at (-100, 450) → x clamped to -40（精灵左缘贴屏幕左缘）
     const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.windowPos.x).toBe(-40)
+    expect(s3.windowPos.y).toBe(450)
   })
 
-  it('drops back to the ground line regardless of drop height (top)', () => {
+  it('clamps y so the sprite stays visible when dropped above the work area', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 20 })
-    // window at (520, -30) → y = groundLine(1080) - 380 = 700
+    // window at (520, -30) → 精灵顶缘贴工作区顶：y = 0 - 20 = -20
     const s3 = releaseDrag(s2, bounds, SPRITE)
-    expect(s3.windowPos).toEqual({ x: 520, y: 700 })
+    expect(s3.windowPos).toEqual({ x: 520, y: -20 })
   })
 
-  it('drops back to the ground line when released below the work area', () => {
+  it('clamps y to the ground line when released below the work area', () => {
     const s0 = createDragState({ x: 500, y: 700 })
     const s1 = pickupDrag(s0, { x: 580, y: 750 })
     const s2 = dragFollow(s1, { x: 600, y: 1500 })
-    // window at (520, 1450) → y = 700，不再按窗口高度钳制（避免悬空 20px）
+    // window at (520, 1450) → y 最多落到地面线：groundLine(1080) - 380 = 700（足部贴地）
     const s3 = releaseDrag(s2, bounds, SPRITE)
     expect(s3.windowPos).toEqual({ x: 520, y: 700 })
   })
@@ -110,9 +111,9 @@ describe('releaseDrag (§7.3 松手停在放置位置)', () => {
     const s0 = createDragState({ x: 2000, y: 700 })
     const s1 = pickupDrag(s0, { x: 2080, y: 750 })
     const s2 = dragFollow(s1, { x: 1000, y: 500 })
-    // window at (920, 450) → x clamped to [1880, 4120]；y = 1440 - 380 = 1060
+    // window at (920, 450) → x clamped to [1880, 4120]；y 在工作区内，停在 450
     const s3 = releaseDrag(s2, secondary, SPRITE)
-    expect(s3.windowPos).toEqual({ x: 1880, y: 1060 })
+    expect(s3.windowPos).toEqual({ x: 1880, y: 450 })
   })
 
   it('throws on invalid sprite bounds', () => {

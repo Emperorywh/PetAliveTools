@@ -20,7 +20,10 @@ vi.mock('electron', () => ({
   },
 }))
 
-vi.mock('../../src/main/window', () => ({ setInteractive: vi.fn() }))
+vi.mock('../../src/main/window', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/window')>()
+  return { ...actual, setInteractive: vi.fn() }
+})
 vi.mock('../../src/main/input/context-menu', () => ({ showContextMenu: vi.fn() }))
 
 import { MouseHandler } from '../../src/main/input/mouse-handler'
@@ -61,7 +64,7 @@ function makeFakeWindow() {
   const win = {
     isDestroyed: () => false,
     getBounds: () => ({ x: 500, y: 600, width: 400, height: 400 }),
-    setPosition: vi.fn(),
+    setBounds: vi.fn(),
     webContents: { send },
   } as unknown as BrowserWindow
   return { win, send }
@@ -245,7 +248,7 @@ describe('MouseHandler 拖拽 IPC（交互不切换片段）', () => {
 
     expect(onUserDragStart).toHaveBeenCalledTimes(1)
     expect(onUserDragEnd).not.toHaveBeenCalled()
-    expect(win.setPosition).toHaveBeenCalled()
+    expect(win.setBounds).toHaveBeenCalled()
 
     handler.dispose()
   })
@@ -261,7 +264,7 @@ describe('MouseHandler 拖拽 IPC（交互不切换片段）', () => {
     }, { windowWidth: 400, windowHeight: 400 })
 
     ipcOnHandlers.get('input:drag-move')!({} as unknown, 50, 60)
-    const movesBeforeEnd = (win.setPosition as ReturnType<typeof vi.fn>).mock.calls.length
+    const movesBeforeEnd = (win.setBounds as ReturnType<typeof vi.fn>).mock.calls.length
     ipcOnHandlers.get('input:drag-end')!({} as unknown, {
       x: 40,
       y: 20,
@@ -270,8 +273,8 @@ describe('MouseHandler 拖拽 IPC（交互不切换片段）', () => {
     })
 
     expect(onUserDragEnd).toHaveBeenCalledTimes(1)
-    // 松手后窗口位置被钳制到可见区并落回地面线
-    expect((win.setPosition as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+    // 松手后窗口位置被钳制到工作区可见范围（停在松手位置）
+    expect((win.setBounds as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
       movesBeforeEnd + 1,
     )
 

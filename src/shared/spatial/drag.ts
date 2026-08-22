@@ -4,9 +4,9 @@
  * 拾取 → 跟随光标 → 松手 → 停在松手位置。
  *
  * - 拖拽中：窗口跟随光标（保持拾取时的抓取偏移，宠物"挂"在光标上）。
- * - 松手：x 按精灵可见范围钳制到工作区（窗口可越出屏幕边缘，
- *   只要宠物本体留在屏内）；y 直接落回地面线 (§7.1)，
- *   与行走/启动的口径一致。
+ * - 松手：窗口停留在松手位置，x/y 按精灵可见范围钳制到工作区
+ *   （窗口可越出屏幕边缘，只要宠物本体留在屏内）。
+ *   仅当拖出工作区顶/底边时才收回——拖过底边时最多落到地面线。
  *
  * 鼠标事件与命中盒由交互层驱动；本模块只提供显式状态
  * 转移与位置计算的纯逻辑。
@@ -101,8 +101,8 @@ export function dragFollow(state: DragState, cursor: ScreenPoint): DragState {
 /**
  * 松手：窗口停留在松手位置，恢复 idle。
  *
- * x 按精灵可见范围钳制到工作区（窗口可越出屏幕边缘）；
- * y 落回地面线，使精灵足部贴合 (§7.1，与行走/启动口径一致)。
+ * x/y 均按精灵可见范围钳制到工作区（窗口透明区可越出屏幕边缘）；
+ * 拖过工作区底边时 y 最多落到地面线，即精灵足部贴地 (§7.1)。
  *
  * @param bounds 工作区边界
  * @param sprite 精灵可见包围盒（窗口局部像素）
@@ -129,8 +129,11 @@ export function releaseDrag(
   const maxX = bounds.x + bounds.width - (sprite.x + sprite.width)
   const x = maxX <= minX ? minX : Math.min(Math.max(state.windowPos.x, minX), maxX)
 
-  // 足部（精灵底边）贴合地面线
-  const y = bounds.groundLine - (sprite.y + sprite.height)
+  // y 同口径钳制：松手位置即放置位置；
+  // 仅拖出工作区顶/底边时收回（底边即地面线，精灵足部贴地）
+  const minY = bounds.y - sprite.y
+  const maxY = bounds.groundLine - (sprite.y + sprite.height)
+  const y = maxY <= minY ? minY : Math.min(Math.max(state.windowPos.y, minY), maxY)
 
   return { phase: 'idle', windowPos: { x, y }, grabOffset: null }
 }

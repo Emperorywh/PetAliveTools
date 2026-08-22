@@ -75,6 +75,33 @@ export function setInteractive(win: BrowserWindow, interactive: boolean): void {
   }
 }
 
+/**
+ * 移动宠物窗口到指定位置，并把尺寸钉回固定逻辑值。
+ *
+ * Windows 分数缩放（如 125%）下，透明无边框窗口每调一次 setPosition，
+ * 尺寸都会被 DIP↔物理像素往返舍入撑大约 1 DIP（Electron 平台层缺陷）。
+ * 拖拽按 mousemove、行走按 60fps 持续调用，误差不断累积，
+ * 视频（100% 填充窗口）看起来就会"不断放大"。
+ *
+ * 这里改用 setBounds 显式携带固定尺寸（实测不再累积，残余 ≤1 DIP 舍入抖动），
+ * 并在位置与尺寸都已正确时跳过调用：长按不动等场景下零窗口消息 churn，
+ * 也能把已被撑大的窗口自愈回固定尺寸。
+ */
+export function setPetWindowPosition(win: BrowserWindow, x: number, y: number): void {
+  const tx = Math.round(x)
+  const ty = Math.round(y)
+  const bounds = win.getBounds()
+  if (
+    bounds.x === tx &&
+    bounds.y === ty &&
+    bounds.width === WINDOW_WIDTH &&
+    bounds.height === WINDOW_HEIGHT
+  ) {
+    return
+  }
+  win.setBounds({ x: tx, y: ty, width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
+}
+
 /** 按视图名加载工具窗口 URL（dev server 或生产构建文件） */
 function loadToolView(win: BrowserWindow, view: string): void {
   if (process.env['ELECTRON_RENDERER_URL']) {

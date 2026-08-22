@@ -13,6 +13,7 @@
 
 import type { BrowserWindow } from 'electron'
 
+import { setPetWindowPosition } from '../window'
 import {
   walkXAt,
   DEFAULT_WALK_VELOCITY_PX_PER_SEC,
@@ -108,8 +109,8 @@ export class WalkController {
       },
       nowMs,
     )
-    const [currentX, currentY] = win.getPosition()
-    const rounded = Math.round(x)
-    if (rounded !== currentX) win.setPosition(rounded, currentY)
+    // 60fps 连续移动必须钉住窗口尺寸：分数缩放下裸 setPosition
+    // 会逐次撑大窗口；位置/尺寸未变时 helper 自身跳过调用
+    setPetWindowPosition(win, x, win.getBounds().y)
   }
 }
