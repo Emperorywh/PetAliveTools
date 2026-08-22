@@ -9,8 +9,6 @@ npm run dev         # electron-vite 开发模式
 npm run build       # 生产构建（输出到 out/）
 npm run typecheck   # tsc --noEmit（strict + noUnusedLocals/Parameters）
 npm run lint        # eslint .（ESLint 9 flat config）
-npm test            # vitest run（全部测试，约 434 项）
-npx vitest run test/behavior/fsm.test.ts   # 运行单个测试文件
 npm run pack        # 构建 + electron-builder --dir（Windows x64）
 npm run dist        # 构建 + electron-builder（NSIS 安装包，输出 dist/）
 ```
@@ -21,7 +19,6 @@ npm run dist        # 构建 + electron-builder（NSIS 安装包，输出 dist/�
 - `src/preload/index.ts` — 唯一的 contextBridge，向渲染层暴露 `window.petalive`
 - `src/renderer/` — 无框架的 TypeScript UI：`sprite/video-player.ts`、`clip-playback.ts`、`settings/`、`import-wizard.ts`
 - `src/shared/` — 两进程共用的纯逻辑与类型：`types/`、`schemas/`（运行时校验）、`spatial/`、`media-url.ts`、`direct-media.ts`。不依赖 Electron API
-- `test/` — Vitest 单测（node 环境），目录结构与 src 对应
 - `docs/` — 见下方"必读文档"
 
 ## 不可违反的媒体边界（改代码前必读）
@@ -38,13 +35,13 @@ npm run dist        # 构建 + electron-builder（NSIS 安装包，输出 dist/�
 
 - 三层进程结构：main / preload / renderer。渲染层只能通过 `window.petalive`（preload 中 contextBridge 暴露）与主进程通信，不直接使用 `ipcRenderer` 或 Node API
 - IPC 通道按特性命名空间命名（`import:*`、`scheduler:*`、`input:*`、`audio:*`、`settings:*`、`profile:*`）。新增 IPC 必须三处同步：`ipcMain.handle/on`、preload bridge 接口、渲染层调用
-- 可测试的纯逻辑放 `src/shared/`（如 hitbox、interaction-state、drag、media-url），主进程与测试共用；Electron 依赖隔离在 `src/main/` 各模块内
+- 不依赖 Electron 的纯逻辑放 `src/shared/`（如 hitbox、interaction-state、drag、media-url），Electron 依赖隔离在 `src/main/` 各模块内
 
 ## 代码风格
 
 - Prettier：无分号、单引号、2 空格缩进、无尾逗号、printWidth 100
 - TS strict 模式；未使用的局部变量/参数会导致 typecheck 失败
-- 测试位于 `test/**/*.test.ts`，新功能需附带对应单测（当前约 41 个测试文件）
+- 本项目不维护自动化测试（已于 2026-08-22 移除全部单测与 vitest），验证方式为 typecheck/lint/build 加人工手动测试，**不要新建测试文件或引入测试框架**
 
 ## 必读文档（改敏感区域前先读）
 

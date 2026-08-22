@@ -8,8 +8,7 @@
  * 托盘菜单 UI 由自定义 HTML 菜单窗口呈现（input/context-menu 控制器），
  * 本模块不再构建原生菜单模板。
  *
- * 本模块不依赖 Electron 运行时（对话框通过 FileDialogs 注入），
- * 可在 vitest node 环境下直接单元测试。
+ * 本模块不依赖 Electron 运行时（对话框通过 FileDialogs 注入）。
  *
  * 运行于主进程。
  */

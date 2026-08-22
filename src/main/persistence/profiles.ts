@@ -8,7 +8,7 @@
  * 需求状态（needs-state.json）保存在各 profile 自己的项目目录内，
  * 由调用方在切换前后读写，从而实现各宠物状态互相独立。
  *
- * 运行于主进程（与 vitest node 环境）。
+ * 运行于主进程（纯 Node 环境，不依赖 Electron API）。
  */
 
 import { promises as fs } from 'node:fs'

@@ -9,7 +9,7 @@
  * 2. 四个应用配置 JSON 文件齐全，且通过 schema 校验
  * 3. clips/ 中的视频按文件名直接识别，audio.meta.json 引用的音频存在
  *
- * 运行于主进程（与 vitest node 环境）。
+ * 运行于主进程（纯 Node 环境，不依赖 Electron API）。
  */
 
 import { promises as fs } from 'node:fs'

@@ -10,7 +10,7 @@
  * - 通过 End of Central Directory 定位中央目录（数据偏移以中央目录为准，
  *   兼容带 data descriptor 的条目）
  *
- * 运行于主进程（与 vitest node 环境）。
+ * 运行于主进程（纯 Node 环境，不依赖 Electron API）。
  */
 
 import { deflateRawSync, inflateRawSync } from 'node:zlib'

@@ -8,10 +8,12 @@
 | 项目 | 结果 |
 |---|---|
 | `npm run typecheck` | 通过，0 错误 |
-| `npm test -- --reporter=dot` | 通过，41 个测试文件、434 项测试 |
 | `npm run lint` | 通过 |
 | `npm run build` | 通过，主进程、preload、renderer 均完成生产构建 |
 | `npm run pack` | 通过，Windows x64 unpacked 包完成，未要求 FFmpeg 资源 |
+
+> 注：2026-08-22 起项目移除全部单元测试与 vitest（此前为 41 个测试文件、434 项测试，
+> 本节第 2~4 条的自动化验证结论来自当时的测试基线），此后验证以人工手动测试为准。
 
 ## 2. 直接导入验证
 
