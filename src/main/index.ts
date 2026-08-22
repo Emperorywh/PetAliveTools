@@ -33,7 +33,7 @@ import { registerDirectImportIpcHandlers } from './direct-import-handlers'
 import { registerMediaScheme, handleMediaProtocol } from './media-protocol'
 import { localPathToMediaUrl } from '../shared/media-url'
 import { clipFromFileName } from '../shared/direct-media'
-import { MouseHandler } from './input/mouse-handler'
+import { MouseHandler, type MouseHandlerCallbacks } from './input/mouse-handler'
 import { closeContextMenu, showTrayMenu } from './input/context-menu'
 import { AudioCoordinator, type AudioPlayCommand } from './audio'
 import {
@@ -128,6 +128,8 @@ let currentPersonality: Personality | null = null
 let lastWeightRefreshMs = 0
 /** 渲染层就绪握手：宠物视图注册完调度监听器后为 true，此前不下发调度命令 */
 let rendererReady = false
+/** GPU 崩溃后重建宠物窗口的去抖计时器 */
+let recreateWindowTimer: ReturnType<typeof setTimeout> | null = null
 /** 渲染层就绪前需要补发的空素材引导（§13） */
 let guidancePending = false
 
@@ -281,59 +283,109 @@ async function bootstrap(): Promise<void> {
   setInteractive(mainWindow, false)
 
   // 9. 鼠标交互处理器：穿透/交互切换 + 抢占 + 拖拽 + 右键菜单 (§10)
-  mouseHandler = new MouseHandler(
-    mainWindow,
-    {
-      onHide: () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return
-        if (mainWindow.isVisible()) mainWindow.hide()
-        else mainWindow.show()
-      },
-      onSettings: () => openSettings(),
-      onAbout: () => console.log('[input] about'),
-      onImportWizard: () => openImportWizard(),
-      onFeed: () => {
-        needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
-        void persistNeedsState()
-        refreshBehaviorWeights()
-      },
-      onToy: () => {
-        needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
-        void persistNeedsState()
-        refreshBehaviorWeights()
-      },
-      onDrink: () => {
-        // 喂水：需求模型无口渴维度，按轻度缓解饥饿 + 愉悦小幅上升处理
-        needsState = applyNeedDelta(needsState, { hunger: -10, happiness: 5 })
-        void persistNeedsState()
-        refreshBehaviorWeights()
-      },
-      // 用户拖拽不切换片段：仅暂停/恢复行走位移，避免窗口在被拖动时自主移动
-      onUserDragStart: () => {
-        userDragging = true
-        walkController?.stop()
-      },
-      onUserDragEnd: () => {
-        userDragging = false
-        syncWalkMotion()
-      },
-    },
-    { windowWidth: WINDOW_WIDTH, windowHeight: WINDOW_HEIGHT },
-  )
-  if (audioCoordinator) {
-    mouseHandler.setAudioCoordinator(audioCoordinator)
-  }
-  // IR-001：抢占产生的渲染命令与 tick 循环走同一分发链路
-  mouseHandler.setCommandDispatcher((commands) => processSchedulerCommands(commands))
+  attachMouseHandler()
 
   // 10. 初始化调度器：FSM → scheduler → renderer 完整运行时闭环 (§9)
   await initScheduler()
 
   // 防止窗口被关闭时退出
-  mainWindow.on('close', (e) => {
+  interceptCloseToHide(mainWindow)
+}
+
+/** 宠物窗口的 close 兜底：拦截关闭改为隐藏（托盘应用不随窗口关闭退出） */
+function interceptCloseToHide(win: BrowserWindow): void {
+  win.on('close', (e) => {
     e.preventDefault()
-    mainWindow?.hide()
+    if (!win.isDestroyed()) win.hide()
   })
+}
+
+/** 创建并装配鼠标交互处理器（启动引导与 GPU 崩溃后窗口重建共用） */
+function attachMouseHandler(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mouseHandler = new MouseHandler(mainWindow, mouseHandlerCallbacks(), {
+    windowWidth: WINDOW_WIDTH,
+    windowHeight: WINDOW_HEIGHT,
+  })
+  if (audioCoordinator) {
+    mouseHandler.setAudioCoordinator(audioCoordinator)
+  }
+  if (scheduler) {
+    mouseHandler.setScheduler(scheduler)
+  }
+  // IR-001：抢占产生的渲染命令与 tick 循环走同一分发链路
+  mouseHandler.setCommandDispatcher((commands) => processSchedulerCommands(commands))
+}
+
+/** 鼠标交互回调（重建窗口时随新 MouseHandler 复用同一组行为） */
+function mouseHandlerCallbacks(): MouseHandlerCallbacks {
+  return {
+    onHide: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (mainWindow.isVisible()) mainWindow.hide()
+      else mainWindow.show()
+    },
+    onSettings: () => openSettings(),
+    onAbout: () => console.log('[input] about'),
+    onImportWizard: () => openImportWizard(),
+    onFeed: () => {
+      needsState = applyNeedDelta(needsState, { hunger: -40, happiness: 10 })
+      void persistNeedsState()
+      refreshBehaviorWeights()
+    },
+    onToy: () => {
+      needsState = applyNeedDelta(needsState, { happiness: 20, attention: 20, fatigue: 5 })
+      void persistNeedsState()
+      refreshBehaviorWeights()
+    },
+    onDrink: () => {
+      // 喂水：需求模型无口渴维度，按轻度缓解饥饿 + 愉悦小幅上升处理
+      needsState = applyNeedDelta(needsState, { hunger: -10, happiness: 5 })
+      void persistNeedsState()
+      refreshBehaviorWeights()
+    },
+    // 用户拖拽不切换片段：仅暂停/恢复行走位移，避免窗口在被拖动时自主移动
+    onUserDragStart: () => {
+      userDragging = true
+      walkController?.stop()
+    },
+    onUserDragEnd: () => {
+      userDragging = false
+      syncWalkMotion()
+    },
+  }
+}
+
+/**
+ * GPU 进程崩溃后重建宠物窗口。
+ *
+ * 透明窗口的 DWM 合成表面随 GPU 进程死亡而失效：Chromium 重启 GPU 进程后
+ * 旧 HWND 也不会恢复，整窗保持纯黑（实测复现：连续崩溃后窗口永久变黑）。
+ * 销毁旧窗口、以相同位置与可见性创建新窗口即可拿到新的合成表面。
+ * 渲染层就绪握手会自动重放当前片段 (§13)，调度/tick/音频状态都在主进程，
+ * 不受窗口替换影响。
+ */
+function recreatePetWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const oldWindow = mainWindow
+  const bounds = oldWindow.getBounds()
+  const wasVisible = oldWindow.isVisible()
+  console.warn('[gpu] 重建宠物窗口以恢复透明合成表面')
+
+  // 先建新再销毁旧：销毁瞬间若无任何窗口会触发 window-all-closed 退出应用
+  const win = createPetWindow({ show: wasVisible })
+  win.setBounds(bounds)
+  mainWindow = win
+  setInteractive(win, false)
+  interceptCloseToHide(win)
+
+  // 交互层 IPC 绑定具体窗口：先解绑旧处理器，再随新窗口重建
+  mouseHandler?.dispose()
+  mouseHandler = null
+  attachMouseHandler()
+
+  // destroy 不触发 close（close 会被拦截改为隐藏），确保旧窗口真正销毁
+  oldWindow.destroy()
 }
 
 /** 托盘菜单回调（§10、§12.2、§12.3） */
@@ -973,6 +1025,29 @@ if (gotSingleInstanceLock) {
 } else {
   app.quit()
 }
+
+// GPU 进程崩溃重试不限次（Chromium 开关，须在 app ready 前设置）。
+//
+// 默认行为：GPU 进程崩溃次数达到上限后，Chromium 会永久回退到软件合成。
+// 软件合成不支持窗口逐像素透明，transparent 宠物窗口会整窗变黑且不会自愈
+// （实测：GPU 竞争（如本机同时跑 ComfyUI 视频生成）触发一次崩溃后，
+//  窗口可能保持纯黑直到重启应用）。
+// 关掉崩溃上限后，Chromium 会持续以硬件模式重启 GPU 进程，
+// 瞬时崩溃（如驱动 TDR、显存压力）恢复后窗口自行恢复透明渲染。
+app.commandLine.appendSwitch('disable-gpu-process-crash-limit')
+
+app.on('child-process-gone', (_event, details) => {
+  if (details.type !== 'GPU') return
+  console.warn(`[gpu] process gone (${details.reason})，等待 Chromium 以硬件模式重启`)
+  // 透明窗口的 DWM 合成表面随 GPU 进程死亡而失效，旧窗口会保持纯黑不再
+  // 自愈；GPU 重启后重建窗口才能恢复透明渲染。去抖避免崩溃风暴期间
+  // 反复重建（Chromium 硬件模式重启约 200ms，1.5s 足够稳定）。
+  if (recreateWindowTimer) clearTimeout(recreateWindowTimer)
+  recreateWindowTimer = setTimeout(() => {
+    recreateWindowTimer = null
+    recreatePetWindow()
+  }, 1500)
+})
 
 // 特权媒体协议声明须在 app ready 前完成
 registerMediaScheme()

@@ -21,7 +21,7 @@ const WINDOW_HEIGHT = 400
  * - resizable: false      固定尺寸
  * - skipTaskbar: true     不在任务栏显示
  */
-export function createPetWindow(): BrowserWindow {
+export function createPetWindow(options?: { show?: boolean }): BrowserWindow {
   const win = new BrowserWindow({
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
@@ -43,9 +43,12 @@ export function createPetWindow(): BrowserWindow {
   // 默认可穿透点击：点击落到桌面（§6.1）
   win.setIgnoreMouseEvents(true, { forward: true })
 
-  win.on('ready-to-show', () => {
-    win.show()
-  })
+  // GPU 崩溃后重建隐藏态窗口时不自动显示，保持用户的隐藏选择
+  if (options?.show ?? true) {
+    win.on('ready-to-show', () => {
+      win.show()
+    })
+  }
 
   // Dev server (electron-vite dev) or production build
   if (process.env['ELECTRON_RENDERER_URL']) {
